@@ -141,7 +141,8 @@ head="$3"
 if [[ ! -d "$guest_root/.git" ]]; then
     sudo git clone --quiet "$guest_bundle" "$guest_root"
 fi
-test "$(sudo git -C "$guest_root" rev-parse HEAD)" = "$head"+sudo git -C "$guest_root" diff --quiet
+test "$(sudo git -C "$guest_root" rev-parse HEAD)" = "$head"
+sudo git -C "$guest_root" diff --quiet
 sudo git -C "$guest_root" diff --cached --quiet
 test -z "$(sudo git -C "$guest_root" ls-files --others --exclude-standard)"
 ' -- "$guest_bundle" "$guest_root" "$head"
