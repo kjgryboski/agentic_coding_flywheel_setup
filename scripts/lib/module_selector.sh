@@ -6,10 +6,8 @@
 # Provides an interactive terminal selector for ACFS install profiles
 # and optional module groups with safe non-interactive fallbacks.
 
-# Prevent multiple sourcing
-if [[ -n "${_ACFS_MODULE_SELECTOR_SH_LOADED:-}" ]]; then
-    return 0
-fi
+# Do not trust an inherited loaded-marker: it could suppress the canonical
+# selector and leave pre-existing helper functions in control.
 _ACFS_MODULE_SELECTOR_SH_LOADED=1
 
 ACFS_MODULE_SELECTOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,11 +20,19 @@ if ! declare -F log_info &>/dev/null; then
     fi
 fi
 
-if ! declare -F acfs_resolve_selection &>/dev/null; then
-    if [[ -f "$ACFS_MODULE_SELECTOR_DIR/install_helpers.sh" ]]; then
-        # shellcheck source=install_helpers.sh
-        source "$ACFS_MODULE_SELECTOR_DIR/install_helpers.sh"
+if [[ ! -L "$ACFS_MODULE_SELECTOR_DIR" \
+    && -f "$ACFS_MODULE_SELECTOR_DIR/install_helpers.sh" \
+    && ! -L "$ACFS_MODULE_SELECTOR_DIR/install_helpers.sh" ]]; then
+    # Always replace pre-existing helper/policy functions from the exact sibling
+    # library before this selector can inspect manifest metadata.
+    if ! builtin unset -f _acfs_install_helpers_rebind_canonical_contract \
+        _acfs_install_helpers_admit acfs_resolve_selection source_manifest_index 2>/dev/null; then
+        return 1
     fi
+    # shellcheck source=install_helpers.sh
+    builtin source "$ACFS_MODULE_SELECTOR_DIR/install_helpers.sh" || return 1
+else
+    return 1
 fi
 
 acfs_is_interactive_terminal() {
@@ -49,6 +55,7 @@ acfs_is_interactive_terminal() {
 }
 
 acfs_format_reproducible_cli_command() {
+    _acfs_install_helpers_admit configuration || return 1
     local cmd="bash install.sh"
     if [[ -n "${MODE:-}" && "$MODE" != "vibe" ]]; then
         cmd+=" --mode $MODE"
@@ -87,6 +94,7 @@ acfs_format_reproducible_cli_command() {
 }
 
 acfs_render_selection_review() {
+    _acfs_install_helpers_admit list || return 1
     local title="ACFS Installation Plan Review"
     local total_count="${#ACFS_MODULES_IN_ORDER[@]}"
     local selected_count="${#ACFS_EFFECTIVE_PLAN[@]}"
@@ -142,6 +150,7 @@ acfs_render_selection_review() {
 }
 
 acfs_interactive_custom_module_toggles() {
+    _acfs_install_helpers_admit configuration || return 1
     echo ""
     echo "--- Custom Module Selection ---"
     echo "Core required modules are locked and cannot be disabled."
@@ -221,6 +230,7 @@ acfs_interactive_custom_module_toggles() {
 }
 
 acfs_prepare_custom_selection() {
+    _acfs_install_helpers_admit configuration || return 1
     ONLY_MODULES=("${ACFS_EFFECTIVE_PLAN[@]}")
     ONLY_PHASES=()
     SKIP_MODULES=()
@@ -230,6 +240,10 @@ acfs_prepare_custom_selection() {
 }
 
 acfs_interactive_module_selector() {
+    if ! _acfs_install_helpers_admit configuration; then
+        log_error "${ACFS_R1_POLICY_REASON:-LIC1+LIC2 interactive selection is held}"
+        return 1
+    fi
     if ! acfs_is_interactive_terminal; then
         if [[ "${ACFS_INTERACTIVE:-false}" == "true" ]]; then
             log_error "Interactive module selection requested (--interactive), but no interactive TTY is attached."

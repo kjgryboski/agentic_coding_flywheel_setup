@@ -13,12 +13,83 @@ if [[ -z "${ACFS_BLUE:-}" ]]; then
     source "$STACK_SCRIPT_DIR/logging.sh"
 fi
 
-if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1; then
-    if [[ -f "$STACK_SCRIPT_DIR/contract.sh" ]]; then
-        # shellcheck source=contract.sh
-        source "$STACK_SCRIPT_DIR/contract.sh"
+_stack_rebind_canonical_contract() {
+    local contract_script="$STACK_SCRIPT_DIR/contract.sh"
+    local policy_function=""
+
+    if [[ ! -f "$contract_script" || -L "$contract_script" ]]; then
+        log_error "Canonical ACFS admission contract is unavailable: $contract_script"
+        return 1
     fi
+    for policy_function in \
+        acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry \
+        _acfs_r1_array_csv \
+        acfs_r1_runtime_prepare_selection \
+        acfs_r1_runtime_validate_plan \
+        acfs_core_policy_enforce \
+        acfs_core_policy_reason \
+        acfs_core_policy_contract \
+        _acfs_core_policy_target_home \
+        acfs_core_policy_expected_binary_path \
+        acfs_core_policy_expected_bv_versioned_path \
+        acfs_core_policy_expected_binary_sha256 \
+        _acfs_core_policy_sha256_file \
+        _acfs_core_policy_version_output \
+        acfs_core_policy_admit_binary \
+        acfs_core_policy_admit_repair_source \
+        acfs_core_policy_enforce_installer_execution; do
+        if builtin declare -F "$policy_function" >/dev/null 2>&1; then
+            builtin unset -f "$policy_function" 2>/dev/null || {
+                log_error "Refusing a readonly or imported ACFS policy function: $policy_function"
+                return 1
+            }
+        fi
+    done
+    # shellcheck source=contract.sh
+    builtin source "$contract_script" || return 1
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] \
+        || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+        || ! builtin declare -F acfs_core_policy_enforce >/dev/null 2>&1; then
+        log_error "Canonical ACFS admission contract did not bind"
+        return 1
+    fi
+    return 0
+}
+
+_stack_rebind_canonical_contract || return 1 2>/dev/null || exit 1
+
+# The direct stack library exposes installer, version, service, and fallback
+# helpers.  Its moduleless source boundary is held before any of them are
+# defined or any stack metadata can be inspected.
+if ! acfs_r1_runtime_admit_entry helper; then
+    log_error "${ACFS_R1_POLICY_REASON:-R1 direct stack library admission failed}"
+    return 1 2>/dev/null || exit 1
 fi
+
+_stack_r1_admit_module() {
+    local module_id="${1:-}"
+
+    _stack_rebind_canonical_contract || return 1
+    if ! acfs_r1_runtime_admit_entry direct "$module_id"; then
+        log_error "${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected ${module_id:-<empty>}}"
+        return 1
+    fi
+    return 0
+}
 
 # ============================================================
 # Configuration
@@ -598,6 +669,8 @@ _stack_normalize_http_path() {
 
 _stack_agent_mail_cli_path() {
     local target_home=""
+
+    _stack_enforce_core_policy "stack.mcp_agent_mail" doctor "" || return 1
     target_home="$(_stack_target_home "${TARGET_USER:-ubuntu}")"
 
     local preferred="$target_home/mcp_agent_mail/am"
@@ -661,6 +734,7 @@ _stack_repair_agent_mail_cli_symlink() {
 }
 
 _stack_agent_mail_liveness() {
+    _stack_enforce_core_policy "stack.mcp_agent_mail" doctor "" || return 1
     _stack_system_curl -fsS --max-time 10 http://127.0.0.1:8765/health/liveness >/dev/null 2>&1 || \
         _stack_system_curl -fsS --max-time 10 http://127.0.0.1:8765/healthz >/dev/null 2>&1
 }
@@ -669,6 +743,7 @@ _stack_agent_mail_readiness() {
     local readiness_body=""
     local readiness_url=""
 
+    _stack_enforce_core_policy "stack.mcp_agent_mail" doctor "" || return 1
     for readiness_url in \
         http://127.0.0.1:8765/health/readiness \
         http://127.0.0.1:8765/health
@@ -777,8 +852,24 @@ _stack_enforce_core_policy() {
     local operation="${2:-}"
     local supplied_contract="${3:-}"
 
+    if ! _stack_rebind_canonical_contract \
+        || ! declare -f acfs_core_policy_enforce >/dev/null 2>&1; then
+        log_error "${ACFS_CORE_POLICY_REASON:-core admission policy unavailable for $module_id}"
+        return 1
+    fi
+
+    # The absent C5 capsule is the Agent Mail decision. Evaluate the exact
+    # sibling contract before any mutable installer registry can participate.
+    if [[ "$module_id" == "stack.mcp_agent_mail" ]]; then
+        if ! acfs_core_policy_enforce "$module_id" "$operation" "$supplied_contract"; then
+            log_error "${ACFS_CORE_POLICY_REASON:-core admission policy unavailable for $module_id}"
+            return 1
+        fi
+        return 0
+    fi
+
     if ! _stack_require_security \
-        || ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! _stack_rebind_canonical_contract \
         || ! acfs_core_policy_enforce "$module_id" "$operation" "$supplied_contract"; then
         log_error "${ACFS_CORE_POLICY_REASON:-core admission policy unavailable for $module_id}"
         return 1
@@ -804,10 +895,6 @@ _stack_run_verified_installer_with_env() {
         set --
     fi
 
-    if ! _stack_require_security; then
-        return 1
-    fi
-
     case "$tool" in
         mcp_agent_mail|br|bv)
             local core_module=""
@@ -818,10 +905,22 @@ _stack_run_verified_installer_with_env() {
                 bv) core_module="stack.beads_viewer" ;;
             esac
             core_target_home="$(_stack_target_home "${TARGET_USER:-ubuntu}" 2>/dev/null || true)"
+            # Agent Mail must reach the exact HOLD before the mutable security
+            # registry. br needs that registry, then an exact contract rebind;
+            # bv is rejected as a direct installer without loading it.
+            if [[ "$tool" == "br" ]] && ! _stack_require_security; then
+                return 1
+            fi
+            _stack_rebind_canonical_contract || return 1
             if ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
                 || ! acfs_core_policy_enforce_installer_execution \
                     "$core_module" install "$core_target_home" "$@"; then
                 log_warn "${ACFS_CORE_POLICY_REASON:-core installer execution policy unavailable for $tool}"
+                return 1
+            fi
+            ;;
+        *)
+            if ! _stack_require_security; then
                 return 1
             fi
             ;;
@@ -1128,6 +1227,7 @@ _stack_run_installer() {
 
 # Check whether the local Agent Mail HTTP service is healthy.
 _stack_agent_mail_healthy() {
+    _stack_enforce_core_policy "stack.mcp_agent_mail" doctor "" || return 1
     _stack_agent_mail_liveness
 }
 
@@ -1136,6 +1236,7 @@ _stack_agent_mail_ready() {
     local am_cli_path_q=""
     local check_cmd
 
+    _stack_enforce_core_policy "stack.mcp_agent_mail" doctor "" || return 1
     am_cli_path="$(_stack_agent_mail_cli_path 2>/dev/null || true)"
     [[ -n "$am_cli_path" ]] || return 1
     printf -v am_cli_path_q '%q' "$am_cli_path"
@@ -1946,6 +2047,7 @@ _stack_wait_for_agent_mail_health() {
     # update does not spuriously report "service setup/readiness failed".
     local max_wait=240
 
+    _stack_enforce_core_policy "stack.mcp_agent_mail" doctor "" || return 1
     until _stack_agent_mail_healthy && _stack_agent_mail_readiness; do
         if [[ "$waited" -ge "$max_wait" ]]; then
             return 1
@@ -1961,10 +2063,32 @@ _stack_wait_for_agent_mail_health() {
 _stack_is_installed() {
     local tool="$1"
     local cmd="${STACK_COMMANDS[$tool]:-}"
+    local core_module=""
+    local core_contract=""
+    local core_binary=""
 
     if [[ -z "$cmd" ]]; then
         return 1
     fi
+
+    case "$tool" in
+        mcp_agent_mail)
+            _stack_enforce_core_policy "stack.mcp_agent_mail" doctor ""
+            return $?
+            ;;
+        br|bv)
+            [[ "$tool" == "br" ]] \
+                && core_module="stack.beads_rust" \
+                || core_module="stack.beads_viewer"
+            _stack_rebind_canonical_contract || return 1
+            core_contract="$(acfs_core_policy_contract "$core_module" 2>/dev/null || true)"
+            core_binary="$(acfs_core_policy_expected_binary_path "$core_module" 2>/dev/null || true)"
+            [[ -n "$core_contract" && -n "$core_binary" ]] \
+                && acfs_core_policy_admit_binary \
+                    "$core_module" doctor "$core_contract" "$core_binary"
+            return $?
+            ;;
+    esac
 
     _stack_target_has_command "$cmd"
 }
@@ -2017,6 +2141,8 @@ _stack_tool_ready() {
 install_ntm() {
     local tool="ntm"
 
+    _stack_r1_admit_module "stack.ntm" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2042,6 +2168,7 @@ install_mcp_agent_mail() {
     local target_user="${TARGET_USER:-ubuntu}"
     local target_home=""
 
+    _stack_r1_admit_module "stack.mcp_agent_mail" || return 1
     _stack_enforce_core_policy "stack.mcp_agent_mail" install "" || return 1
 
     target_home="$(_stack_target_home "$target_user")"
@@ -2099,6 +2226,8 @@ install_mcp_agent_mail() {
 install_ubs() {
     local tool="ubs"
 
+    _stack_r1_admit_module "stack.ultimate_bug_scanner" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2127,6 +2256,7 @@ install_ubs() {
 # Install Beads Viewer (BV)
 # Task management TUI
 install_bv() {
+    _stack_r1_admit_module "stack.beads_viewer" || return 1
     _stack_enforce_core_policy "stack.beads_viewer" install \
         "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv" || return 1
 
@@ -2139,6 +2269,7 @@ install_bv() {
 install_beads_rust() {
     local tool="br"
 
+    _stack_r1_admit_module "stack.beads_rust" || return 1
     _stack_enforce_core_policy "stack.beads_rust" install \
         "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123" || return 1
 
@@ -2181,6 +2312,8 @@ install_beads_rust() {
 install_cass() {
     local tool="cass"
 
+    _stack_r1_admit_module "stack.coding_agent_session_search" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2204,6 +2337,8 @@ install_cass() {
 # Procedural memory for agents
 install_cm() {
     local tool="cm"
+
+    _stack_r1_admit_module "stack.cass_memory" || return 1
 
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
@@ -2229,6 +2364,8 @@ install_cm() {
 install_caam() {
     local tool="caam"
 
+    _stack_r1_admit_module "stack.caam" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2251,6 +2388,8 @@ install_caam() {
 # Two-person rule for dangerous commands
 install_slb() {
     local tool="slb"
+
+    _stack_r1_admit_module "stack.slb" || return 1
 
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
@@ -2275,6 +2414,8 @@ install_slb() {
 install_ru() {
     local tool="ru"
 
+    _stack_r1_admit_module "stack.repo_updater" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2298,6 +2439,8 @@ install_ru() {
 # Blocks dangerous commands
 install_dcg() {
     local tool="dcg"
+
+    _stack_r1_admit_module "stack.destructive_command_guard" || return 1
 
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
@@ -2334,6 +2477,8 @@ install_dcg() {
 install_rch() {
     local tool="rch"
 
+    _stack_r1_admit_module "stack.remote_compilation_helper" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2356,6 +2501,8 @@ install_rch() {
 # Bayesian process cleanup
 install_pt() {
     local tool="pt"
+
+    _stack_r1_admit_module "stack.process_triage" || return 1
 
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
@@ -2380,6 +2527,8 @@ install_pt() {
 install_fsfs() {
     local tool="fsfs"
 
+    _stack_r1_admit_module "stack.frankensearch" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2402,6 +2551,8 @@ install_fsfs() {
 # Disk pressure defense daemon
 install_sbh() {
     local tool="sbh"
+
+    _stack_r1_admit_module "stack.storage_ballast_helper" || return 1
 
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
@@ -2426,6 +2577,8 @@ install_sbh() {
 install_casr() {
     local tool="casr"
 
+    _stack_r1_admit_module "stack.cross_agent_session_resumer" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2448,6 +2601,8 @@ install_casr() {
 # Fallback release infrastructure
 install_dsr() {
     local tool="dsr"
+
+    _stack_r1_admit_module "stack.doodlestein_self_releaser" || return 1
 
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
@@ -2472,6 +2627,8 @@ install_dsr() {
 install_asb() {
     local tool="asb"
 
+    _stack_r1_admit_module "stack.agent_settings_backup" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2494,6 +2651,8 @@ install_asb() {
 # Claude Code hook for AGENTS.md re-read after compaction
 install_pcr() {
     local tool="pcr"
+
+    _stack_r1_admit_module "stack.pcr" || return 1
     if _stack_pcr_installed; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2522,6 +2681,8 @@ install_pcr() {
 install_ee() {
     local tool="ee"
 
+    _stack_r1_admit_module "stack.eidetic_engine" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2544,6 +2705,8 @@ install_ee() {
 # Pure-Rust Markdown to HTML/PDF renderer
 install_fmd() {
     local tool="fmd"
+
+    _stack_r1_admit_module "stack.franken_markdown" || return 1
 
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
@@ -2568,6 +2731,8 @@ install_fmd() {
 install_pi() {
     local tool="pi"
 
+    _stack_r1_admit_module "stack.pi_agent_rust" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2590,6 +2755,8 @@ install_pi() {
 # Crashed agent-session recovery after a hard power cut
 install_pfr() {
     local tool="pfr"
+
+    _stack_r1_admit_module "stack.power_failure_resumer" || return 1
 
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
@@ -2616,37 +2783,47 @@ install_pfr() {
 # Verify all stack tools are installed
 verify_stack() {
     local all_pass=true
-    local installed_count=0
-    local total_count=${#STACK_COMMANDS[@]}
+    local module_id=""
+    local binary_path=""
+    local supplied_contract=""
 
-    log_detail "Verifying Agent Flywheel stack..."
+    _stack_rebind_canonical_contract || return 1
+    log_detail "Verifying exact R1 stack..."
 
-    for tool in ntm mcp_agent_mail ubs bv br cass cm caam slb ru dcg rch pt fsfs sbh casr dsr asb pcr ee fmd pi pfr; do
-        local cmd="${STACK_COMMANDS[$tool]}"
-        local name="${STACK_NAMES[$tool]}"
+    # Agent Mail must fail before any binary or health probe.
+    if _stack_enforce_core_policy "stack.mcp_agent_mail" doctor ""; then
+        log_error "Agent Mail unexpectedly passed without an accepted C5 capsule"
+        all_pass=false
+    else
+        log_warn "${ACFS_CORE_POLICY_REASON:-Agent Mail remains on C5 commissioning HOLD}"
+        all_pass=false
+    fi
 
-        if _stack_tool_ready "$tool"; then
-            log_detail "  $cmd: installed"
-            ((installed_count += 1))
+    for module_id in stack.beads_rust stack.beads_viewer; do
+        supplied_contract="$(acfs_core_policy_contract "$module_id" 2>/dev/null || true)"
+        binary_path="$(acfs_core_policy_expected_binary_path "$module_id" 2>/dev/null || true)"
+        if [[ -n "$supplied_contract" && -n "$binary_path" ]] \
+            && acfs_core_policy_admit_binary "$module_id" doctor "$supplied_contract" "$binary_path"; then
+            log_detail "  $module_id: exact binary identity admitted"
         else
-            log_warn "  Not ready: $cmd ($name)"
+            log_warn "  $module_id: ${ACFS_CORE_POLICY_REASON:-exact binary identity rejected}"
             all_pass=false
         fi
     done
 
     if [[ "$all_pass" == "true" ]]; then
-        log_success "All $total_count stack tools verified"
+        log_success "Exact R1 stack verified"
         return 0
-    else
-        log_warn "Stack: $installed_count/$total_count tools installed"
-        return 1
     fi
+    return 1
 }
 
 # Check if stack tools respond to --help
 verify_stack_help() {
     local failures=()
 
+    _stack_rebind_canonical_contract || return 1
+    _stack_enforce_core_policy "stack.mcp_agent_mail" doctor "" || return 1
     log_detail "Testing stack tools --help..."
 
     for tool in ntm mcp_agent_mail ubs bv br cass cm caam slb ru dcg rch pt fsfs sbh casr dsr asb pcr ee fmd pi pfr; do
@@ -2670,6 +2847,8 @@ verify_stack_help() {
 
 # Get versions of installed stack tools (for doctor output)
 get_stack_versions() {
+    _stack_rebind_canonical_contract || return 1
+    _stack_enforce_core_policy "stack.mcp_agent_mail" doctor "" || return 1
     echo "Agent Flywheel Stack Versions:"
 
     for tool in ntm mcp_agent_mail ubs bv br cass cm caam slb ru dcg rch pt fsfs sbh casr dsr asb pcr ee fmd pi pfr; do
@@ -2690,39 +2869,28 @@ get_stack_versions() {
 
 # Install all stack tools (called by install.sh)
 install_all_stack() {
+    local aggregate_rc=0
+
+    _stack_rebind_canonical_contract || return 1
+    if ! acfs_r1_runtime_admit_entry direct; then
+        log_error "${ACFS_R1_POLICY_REASON:-R1 direct stack admission failed}"
+        return 1
+    fi
     log_step "7/8" "Installing Agent Flywheel stack..."
 
-    # Install in recommended order (original 10 tools)
-    install_ntm
-    install_mcp_agent_mail
-    install_ubs
-    install_bv
-    install_beads_rust
-    install_cass
-    install_cm
-    install_caam
-    install_slb
-    install_ru
-    install_dcg
+    # R1 admits exactly these three stack modules. Continue collecting so the
+    # deliberate Agent Mail HOLD cannot conceal independent br/bv failures.
+    install_mcp_agent_mail || aggregate_rc=1
+    install_beads_rust || aggregate_rc=1
+    install_bv || aggregate_rc=1
+    verify_stack || aggregate_rc=1
 
-    # Additional tools (8 new integrations)
-    install_rch
-    install_pt
-    install_fsfs
-    install_sbh
-    install_casr
-    install_dsr
-    install_asb
-    install_pcr
-    install_ee
-    install_fmd
-    install_pi
-    install_pfr
-
-    # Verify installation
-    verify_stack
-
-    log_success "Agent Flywheel stack installation complete"
+    if [[ "$aggregate_rc" -ne 0 ]]; then
+        log_error "Exact R1 stack installation or verification failed"
+        return 1
+    fi
+    log_success "Exact R1 stack installation complete"
+    return 0
 }
 
 # ============================================================

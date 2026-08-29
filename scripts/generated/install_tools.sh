@@ -355,6 +355,30 @@ acfs_security_init() {
 # Lazygit (apt or binary fallback)
 acfs_generated_install_tools_lazygit() {
     local module_id="tools.lazygit"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "tools.lazygit: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "tools.lazygit: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "tools.lazygit: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "tools.lazygit: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "tools.lazygit: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -415,6 +439,30 @@ INSTALL_TOOLS_LAZYGIT
 # Lazydocker (binary install)
 acfs_generated_install_tools_lazydocker() {
     local module_id="tools.lazydocker"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "tools.lazydocker: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "tools.lazydocker: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "tools.lazydocker: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "tools.lazydocker: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "tools.lazydocker: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -471,6 +519,30 @@ INSTALL_TOOLS_LAZYDOCKER
 # Atuin CLI with guarded agent-safe shim
 acfs_generated_install_tools_atuin() {
     local module_id="tools.atuin"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "tools.atuin: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "tools.atuin: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "tools.atuin: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "tools.atuin: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "tools.atuin: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -670,6 +742,30 @@ INSTALL_TOOLS_ATUIN
 # Zoxide (better cd)
 acfs_generated_install_tools_zoxide() {
     local module_id="tools.zoxide"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "tools.zoxide: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "tools.zoxide: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "tools.zoxide: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "tools.zoxide: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "tools.zoxide: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -782,6 +878,30 @@ INSTALL_TOOLS_ZOXIDE
 # ast-grep (used by UBS for syntax-aware scanning)
 acfs_generated_install_tools_ast_grep() {
     local module_id="tools.ast_grep"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "tools.ast_grep: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "tools.ast_grep: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "tools.ast_grep: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "tools.ast_grep: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "tools.ast_grep: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -821,6 +941,30 @@ INSTALL_TOOLS_AST_GREP
 # HashiCorp Vault CLI
 acfs_generated_install_tools_vault() {
     local module_id="tools.vault"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "tools.vault: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "tools.vault: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "tools.vault: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "tools.vault: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "tools.vault: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -895,6 +1039,30 @@ INSTALL_TOOLS_VAULT
 # Get Image from Internet Link - download cloud images for visual debugging
 acfs_generated_install_utils_giil() {
     local module_id="utils.giil"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.giil: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.giil: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.giil: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.giil: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.giil: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -1017,6 +1185,30 @@ INSTALL_UTILS_GIIL
 # Chat Shared Conversation to File - convert AI share links to Markdown/HTML
 acfs_generated_install_utils_csctf() {
     local module_id="utils.csctf"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.csctf: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.csctf: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.csctf: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.csctf: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.csctf: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -1139,6 +1331,30 @@ INSTALL_UTILS_CSCTF
 # xf - Ultra-fast X/Twitter archive search with Tantivy
 acfs_generated_install_utils_xf() {
     local module_id="utils.xf"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.xf: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.xf: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.xf: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.xf: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.xf: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -1261,6 +1477,30 @@ INSTALL_UTILS_XF
 # toon_rust (toon) - Token-optimized notation format for LLM context efficiency
 acfs_generated_install_utils_toon_rust() {
     local module_id="utils.toon_rust"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.toon_rust: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.toon_rust: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.toon_rust: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.toon_rust: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.toon_rust: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -1383,6 +1623,30 @@ INSTALL_UTILS_TOON_RUST
 # rano - Network observer for AI CLIs with request/response logging
 acfs_generated_install_utils_rano() {
     local module_id="utils.rano"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.rano: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.rano: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.rano: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.rano: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.rano: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -1505,6 +1769,30 @@ INSTALL_UTILS_RANO
 # markdown_web_browser (mdwb) - Convert websites to Markdown for LLM consumption
 acfs_generated_install_utils_mdwb() {
     local module_id="utils.mdwb"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.mdwb: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.mdwb: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.mdwb: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.mdwb: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.mdwb: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -1627,6 +1915,30 @@ INSTALL_UTILS_MDWB
 # source_to_prompt_tui (s2p) - Code to LLM prompt generator with TUI
 acfs_generated_install_utils_s2p() {
     local module_id="utils.s2p"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.s2p: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.s2p: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.s2p: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.s2p: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.s2p: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -1749,6 +2061,30 @@ INSTALL_UTILS_S2P
 # rust_proxy - Transparent proxy routing for debugging network traffic
 acfs_generated_install_utils_rust_proxy() {
     local module_id="utils.rust_proxy"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.rust_proxy: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.rust_proxy: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.rust_proxy: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.rust_proxy: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.rust_proxy: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -1804,6 +2140,30 @@ INSTALL_UTILS_RUST_PROXY
 # aadc - ASCII diagram corrector for fixing malformed ASCII art
 acfs_generated_install_utils_aadc() {
     local module_id="utils.aadc"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.aadc: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.aadc: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.aadc: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.aadc: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.aadc: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then
@@ -1859,6 +2219,30 @@ INSTALL_UTILS_AADC
 # coding_agent_usage_tracker (caut) - LLM provider usage tracker
 acfs_generated_install_utils_caut() {
     local module_id="utils.caut"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "utils.caut: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "utils.caut: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "utils.caut: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "utils.caut: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "utils.caut: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then

@@ -220,6 +220,35 @@ fi
 
 # Script directory
 _EXPORT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export_config_license_admit() {
+    local entry="${1:-configuration}"
+    local module_id="${2:-}"
+    local contract_path="$_EXPORT_SCRIPT_DIR/contract.sh"
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    [[ ! -L "$_EXPORT_SCRIPT_DIR" && -f "$contract_path" && ! -L "$contract_path" ]] || return 1
+    if ! builtin unset -f acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry 2>/dev/null; then
+        return 1
+    fi
+    # shellcheck source=contract.sh
+    builtin source "$contract_path" || return 1
+    acfs_r1_runtime_admit_entry "$entry" "$module_id"
+}
 _EXPORT_EXPLICIT_ACFS_HOME="$(export_sanitize_abs_nonroot_path "${ACFS_HOME:-}" 2>/dev/null || true)"
 _EXPORT_DEFAULT_ACFS_HOME=""
 [[ -n "$_EXPORT_CURRENT_HOME" ]] && _EXPORT_DEFAULT_ACFS_HOME="${_EXPORT_CURRENT_HOME}/.acfs"
@@ -954,6 +983,7 @@ augment_path_for_target_user() {
 }
 
 load_module_detection_support() {
+    export_config_license_admit helper || return 1
     if [[ "${_ACFS_EXPORT_MODULE_SUPPORT_LOADED:-false}" == "true" ]]; then
         return 0
     fi
@@ -985,6 +1015,8 @@ get_acfs_version() {
 get_tool_version() {
     local tool="$1"
     local version=""
+
+    export_config_license_admit probe || return 1
 
     case "$tool" in
         rust|cargo)
@@ -1170,6 +1202,8 @@ PY
 
 get_modules() {
     local module=""
+
+    export_config_license_admit list || return 1
 
     if load_module_detection_support; then
         for module in "${ACFS_MODULES_IN_ORDER[@]}"; do
@@ -1405,6 +1439,11 @@ export_config_main() {
         2) return 0 ;;
         *) return "$parse_status" ;;
     esac
+
+    if ! export_config_license_admit configuration; then
+        log_error "${ACFS_R1_POLICY_REASON:-LIC1+LIC2 export/configuration is held}"
+        return 1
+    fi
 
     prepare_target_context
     augment_path_for_target_user

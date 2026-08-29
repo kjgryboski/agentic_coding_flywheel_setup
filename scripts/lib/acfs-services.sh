@@ -80,19 +80,63 @@ _agent_mail_mutation_admitted() {
     local services_script_path="${BASH_SOURCE[0]}"
     local services_script_dir=""
     local contract_script=""
+    local policy_function=""
 
-    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1; then
-        services_script_dir="${services_script_path%/*}"
-        [[ "$services_script_dir" != "$services_script_path" ]] || services_script_dir="."
-        services_script_dir="$(cd "$services_script_dir" && pwd -P)" || return 1
-        contract_script="$services_script_dir/contract.sh"
-        if [[ -f "$contract_script" && ! -L "$contract_script" ]]; then
-            # shellcheck disable=SC1090  # runtime-resolved sibling library
-            source "$contract_script"
-        fi
+    services_script_dir="${services_script_path%/*}"
+    [[ "$services_script_dir" != "$services_script_path" ]] || services_script_dir="."
+    services_script_dir="$(cd "$services_script_dir" && pwd -P)" || return 1
+    contract_script="$services_script_dir/contract.sh"
+    if [[ ! -f "$contract_script" || -L "$contract_script" ]]; then
+        _err "Canonical ACFS admission contract is unavailable: $contract_script"
+        return 1
     fi
 
-    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+    # The service manager is directly executable and may be sourced by another
+    # shell.  Never trust inherited functions: remove them and source the exact
+    # sibling contract on every command boundary, before any binary, session,
+    # health, unit, dry-run, or status probe.
+    for policy_function in \
+        acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry \
+        _acfs_r1_array_csv \
+        acfs_r1_runtime_prepare_selection \
+        acfs_r1_runtime_validate_plan \
+        acfs_core_policy_enforce \
+        acfs_core_policy_reason \
+        acfs_core_policy_contract \
+        _acfs_core_policy_target_home \
+        acfs_core_policy_expected_binary_path \
+        acfs_core_policy_expected_bv_versioned_path \
+        acfs_core_policy_expected_binary_sha256 \
+        _acfs_core_policy_sha256_file \
+        _acfs_core_policy_version_output \
+        acfs_core_policy_admit_binary \
+        acfs_core_policy_admit_repair_source \
+        acfs_core_policy_enforce_installer_execution; do
+        if builtin declare -F "$policy_function" >/dev/null 2>&1; then
+            if ! builtin unset -f "$policy_function" 2>/dev/null; then
+                _err "Refusing a readonly or imported ACFS policy function: $policy_function"
+                return 1
+            fi
+        fi
+    done
+    # shellcheck disable=SC1090  # runtime-resolved sibling library
+    builtin source "$contract_script" || return 1
+
+    if ! builtin declare -F acfs_core_policy_enforce >/dev/null 2>&1 \
         || ! acfs_core_policy_enforce "stack.mcp_agent_mail" service ""; then
         _err "${ACFS_CORE_POLICY_REASON:-Agent Mail core admission policy unavailable}"
         _err "Agent Mail service admission is on HOLD; use 'acfs doctor' for the exact-source status."
@@ -101,6 +145,12 @@ _agent_mail_mutation_admitted() {
 
     return 0
 }
+
+# Sourcing the service manager exposes direct session/socket/process helpers.
+# Keep those helpers undefined while Agent Mail lacks an accepted exact C5
+# capsule, so even a caller that bypasses main cannot probe or mutate service
+# state.
+_agent_mail_mutation_admitted || return 1 2>/dev/null || exit 1
 
 _system_binary_path() {
     local name="${1:-}"
@@ -162,6 +212,7 @@ _quote_command() {
 _service_cmd() {
     case "$1" in
         agent-mail)
+            _agent_mail_mutation_admitted || return 1
             _quote_command "$_AM_BIN" serve-http --no-tui --host "$ACFS_AGENT_MAIL_HOST" --port "$ACFS_AGENT_MAIL_PORT"
             ;;
         cm)
@@ -244,6 +295,7 @@ _agent_mail_is_healthy() {
     local readiness_body=""
     local readiness_path=""
 
+    _agent_mail_mutation_admitted || return 1
     [[ -n "$_CURL_BIN" ]] || return 1
     url_host="$(_http_url_host "$ACFS_AGENT_MAIL_HOST")"
     "$_CURL_BIN" -fsS --max-time 3 \
@@ -260,6 +312,7 @@ _agent_mail_is_healthy() {
 }
 
 _native_agent_mail_unit_available() {
+    _agent_mail_mutation_admitted || return 1
     [[ "$ACFS_AGENT_MAIL_HOST" == "$ACFS_DEFAULT_AGENT_MAIL_HOST" ]] || return 1
     [[ "$ACFS_AGENT_MAIL_PORT" == "$ACFS_DEFAULT_AGENT_MAIL_PORT" ]] || return 1
     [[ -n "$_SYSTEMCTL_BIN" ]] || return 1
@@ -268,6 +321,7 @@ _native_agent_mail_unit_available() {
 }
 
 _native_agent_mail_is_active() {
+    _agent_mail_mutation_admitted || return 1
     _native_agent_mail_unit_available || return 1
     "$_SYSTEMCTL_BIN" --user is-active --quiet agent-mail.service >/dev/null 2>&1
 }
@@ -276,6 +330,7 @@ _wait_for_agent_mail() {
     local max_wait="${1:-15}"
     local waited=0
 
+    _agent_mail_mutation_admitted || return 1
     while true; do
         _agent_mail_is_healthy && return 0
         (( waited >= max_wait )) && return 1
@@ -292,6 +347,11 @@ _validate_http_endpoints() {
     local rc=0
     local p
     local h
+
+    # Endpoint configuration is itself an Agent Mail lifecycle surface. A
+    # direct library call may not turn inert configuration into a success
+    # signal while the exact C5 capsule is absent.
+    _agent_mail_mutation_admitted || return 1
 
     for h in "ACFS_AGENT_MAIL_HOST:$ACFS_AGENT_MAIL_HOST" "ACFS_CM_HOST:$ACFS_CM_HOST"; do
         local host_name="${h%%:*}" host_value="${h#*:}"
@@ -415,11 +475,10 @@ _wait_for_tmux_services() {
 # --- Commands ---
 
 cmd_start() {
-    # Validate inert configuration first, then enforce Agent Mail admission
-    # before an existing session, dry-run, or healthy external endpoint can be
-    # treated as a successful service state.
-    _validate_http_endpoints config-only || return 1
+    # Enforce Agent Mail admission before configuration, an existing session,
+    # dry-run, or a healthy external endpoint can be treated as successful.
     _agent_mail_mutation_admitted || return 1
+    _validate_http_endpoints config-only || return 1
     _initialize_bins
     _require_tmux
     _validate_http_endpoints || return 1
@@ -617,6 +676,7 @@ cmd_status() {
 }
 
 cmd_restart() {
+    _agent_mail_mutation_admitted || return 1
     _info "Restarting ACFS services..."
     cmd_stop
     cmd_start
@@ -625,6 +685,7 @@ cmd_restart() {
 cmd_logs() {
     local target="${1:-}"
 
+    _agent_mail_mutation_admitted || return 1
     _initialize_bins
     _require_tmux
 
@@ -742,6 +803,15 @@ main() {
         cmd="${args[0]:-}"
         args=("${args[@]:1}")
     fi
+
+    # Every operational service-manager entry is an Agent Mail lifecycle
+    # boundary.  Hold before existing-session, dry-run, status, log, binary,
+    # native-unit, tmux, health, or configuration inspection can succeed.
+    case "$cmd" in
+        start|stop|status|restart|logs|log|attach)
+            _agent_mail_mutation_admitted || return 1
+            ;;
+    esac
 
     case "$cmd" in
         start)   cmd_start ;;

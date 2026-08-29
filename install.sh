@@ -1453,7 +1453,10 @@ acfs_summary_emit() {
         failed_phase=$(jq -r '.failed_phase // empty' "$ACFS_STATE_FILE" 2>/dev/null) || true
         if [[ -n "$failed_phase" ]]; then
             local resume_hint
-            resume_hint=$(generate_resume_hint "$failed_phase" "")
+            resume_hint="$(generate_resume_hint "$failed_phase" "" 2>/dev/null || true)"
+            if [[ -z "$resume_hint" ]]; then
+                resume_hint="LIC1+LIC2 HOLD: no restart command is authorized"
+            fi
             failure_json=$(jq -n \
                 --arg phase "$failed_phase" \
                 --arg step "$(jq -r '.failed_step // empty' "$ACFS_STATE_FILE" 2>/dev/null)" \
@@ -1519,136 +1522,12 @@ generate_resume_hint() {
     local failed_phase="${1:-}"
     local failed_step="${2:-}"
 
-    # Start with base command
-    local cmd=""
-    local install_url=""
-    local install_url_q=""
-    local arg_q=""
-    local resume_ref=""
-    local resume_ref_pinned_from_commit=false
-    local resume_repo_owner="${ACFS_REPO_OWNER:-Dicklesworthstone}"
-    local resume_repo_name="${ACFS_REPO_NAME:-agentic_coding_flywheel_setup}"
-    local -a resume_args=(--resume)
-
-    # A verified archive child has a temporary SCRIPT_DIR, but its logical
-    # origin is still the streamed installer. Never suggest that deleted path.
-    local logical_streamed=false
-    if [[ -z "${SCRIPT_DIR:-}" ]] \
-        || [[ "${ACFS_VERIFIED_BOOTSTRAP_SOURCE:-}" == "remote" ]] \
-        || [[ "${ACFS_VERIFIED_BOOTSTRAP_SOURCE:-}" == "local_archive" ]]; then
-        logical_streamed=true
-    fi
-
-    # Prefer curl|bash one-liner for logical streamed invocations; local script
-    # only for a durable local checkout.
-    if [[ "$logical_streamed" == "true" ]]; then
-        # curl|bash invocation - use one-liner format
-        cmd="curl -q -fsSL"
-        if [[ -n "${ACFS_COMMIT_SHA_FULL:-}" ]]; then
-            # Pin to exact commit SHA for reproducibility
-            install_url="https://raw.githubusercontent.com/${resume_repo_owner}/${resume_repo_name}/${ACFS_COMMIT_SHA_FULL}/install.sh"
-        elif [[ -n "${ACFS_REF_INPUT:-}" && "${ACFS_REF_INPUT}" != "main" ]]; then
-            install_url="https://raw.githubusercontent.com/${resume_repo_owner}/${resume_repo_name}/${ACFS_REF_INPUT}/install.sh"
-        elif [[ "$resume_repo_owner" != "Dicklesworthstone" ]] \
-            || [[ "$resume_repo_name" != "agentic_coding_flywheel_setup" ]]; then
-            install_url="https://raw.githubusercontent.com/${resume_repo_owner}/${resume_repo_name}/${ACFS_REF_INPUT:-main}/install.sh"
-        else
-            install_url="https://acfs.sh"
-        fi
-        printf -v install_url_q '%q' "$install_url"
-        cmd="$cmd $install_url_q"
-        cmd="$cmd | bash -p -s --"
-    else
-        # Local script invocation
-        local local_install
-        local_install="${SCRIPT_DIR%/}/install.sh"
-        printf -v local_install '%q' "$local_install"
-        cmd="bash $local_install"
-    fi
-
-    # Always add --resume flag (skips completed phases via state.json)
-
-    # Add mode if not default
-    if [[ "${MODE:-vibe}" != "vibe" ]]; then
-        resume_args+=(--mode "$MODE")
-    fi
-
-    # Propagate --ref so the resume uses the same git ref (avoids the
-    # curl|bash env-var pitfall where ACFS_REF only reaches curl, not bash)
-    if [[ "$logical_streamed" == "true" && -n "${ACFS_COMMIT_SHA_FULL:-}" ]]; then
-        resume_ref="$ACFS_COMMIT_SHA_FULL"
-        resume_ref_pinned_from_commit=true
-    elif [[ -n "${ACFS_REF_INPUT:-}" && "${ACFS_REF_INPUT}" != "main" ]]; then
-        resume_ref="$ACFS_REF_INPUT"
-    fi
-    if [[ -n "$resume_ref" ]]; then
-        resume_args+=(--ref "$resume_ref")
-    fi
-
-    # Preserve checksum metadata that would otherwise be lost when replaying
-    # the resume command with a different --ref than the original invocation.
-    if [[ "${ACFS_CHECKSUMS_REF_EXPLICIT:-false}" == "true" && -n "${ACFS_CHECKSUMS_REF:-}" ]]; then
-        resume_args+=(--checksums-ref "$ACFS_CHECKSUMS_REF")
-    elif [[ "$resume_ref_pinned_from_commit" == "true" && -n "${ACFS_CHECKSUMS_REF:-}" && "$ACFS_CHECKSUMS_REF" != "main" ]]; then
-        # Pinning --ref to an exact SHA would otherwise make parse_args derive
-        # checksum metadata from main, not the symbolic branch used originally.
-        resume_args+=(--checksums-ref "$ACFS_CHECKSUMS_REF")
-    fi
-    if [[ -n "${ACFS_VERIFIED_INSTALLER_CACHE:-}" ]]; then
-        resume_args+=(--verified-installer-cache "$ACFS_VERIFIED_INSTALLER_CACHE")
-    fi
-    if [[ "${ACFS_VERIFIED_BOOTSTRAP_SOURCE:-}" == "local_archive" ]] \
-        && [[ -n "${ACFS_BOOTSTRAP_ORIGINAL_ARCHIVE_PATH:-}" ]]; then
-        resume_args+=(--bootstrap-archive "$ACFS_BOOTSTRAP_ORIGINAL_ARCHIVE_PATH")
-    fi
-
-    # Preserve manifest selection semantics. A targeted failed install must
-    # not suggest a resume command that silently expands into the full default
-    # installation plan.
-    local selection=""
-    local selected_profile_has_selectors=false
-    if [[ -n "${ACFS_SELECTED_PROFILE:-}" ]] \
-        && { [[ -n "${ACFS_PROFILE_ONLY_MODULES["$ACFS_SELECTED_PROFILE"]:-}" ]] \
-            || [[ -n "${ACFS_PROFILE_ONLY_PHASES["$ACFS_SELECTED_PROFILE"]:-}" ]]; }; then
-        selected_profile_has_selectors=true
-        resume_args+=(--profile "$ACFS_SELECTED_PROFILE")
-    fi
-    if [[ "$selected_profile_has_selectors" != "true" && "${ONLY_MODULES+x}" == "x" ]]; then
-        for selection in "${ONLY_MODULES[@]}"; do
-            resume_args+=(--only "$selection")
-        done
-    fi
-    if [[ "$selected_profile_has_selectors" != "true" && "${ONLY_PHASES+x}" == "x" ]]; then
-        for selection in "${ONLY_PHASES[@]}"; do
-            resume_args+=(--only-phase "$selection")
-        done
-    fi
-    if [[ "${SKIP_MODULES+x}" == "x" ]]; then
-        for selection in "${SKIP_MODULES[@]}"; do
-            resume_args+=(--skip "$selection")
-        done
-    fi
-    [[ "${NO_DEPS:-false}" == "true" ]] && resume_args+=(--no-deps)
-
-    # Add skip flags that were used
-    [[ "${SKIP_POSTGRES:-false}" == "true" ]] && resume_args+=(--skip-postgres)
-    [[ "${SKIP_VAULT:-false}" == "true" ]] && resume_args+=(--skip-vault)
-    [[ "${SKIP_CLOUD:-false}" == "true" ]] && resume_args+=(--skip-cloud)
-    [[ "${SKIP_PREFLIGHT:-false}" == "true" ]] && resume_args+=(--skip-preflight)
-    [[ "${SKIP_UBUNTU_UPGRADE:-false}" == "true" ]] && resume_args+=(--skip-ubuntu-upgrade)
-
-    # Add --yes if original run was non-interactive
-    [[ "${YES_MODE:-false}" == "true" ]] && resume_args+=(--yes)
-
-    # Add --strict if it was set
-    [[ "${STRICT_MODE:-false}" == "true" || "${ACFS_STRICT_MODE:-false}" == "true" ]] && resume_args+=(--strict)
-
-    for arg_q in "${resume_args[@]}"; do
-        printf -v arg_q '%q' "$arg_q"
-        cmd="$cmd $arg_q"
-    done
-
-    echo "$cmd"
+    # LIC1+LIC2 leaves no authorized commissioning plan to resume or restart.
+    # Keep this refusal independent of ambient shell functions so failure paths
+    # cannot turn historical qualification evidence into an install command.
+    : "$failed_phase" "$failed_step"
+    ACFS_R1_POLICY_REASON="LIC1+LIC2 HOLD: no resume or restart command is authorized"
+    return 1
 }
 
 acfs_install_run_has_failures() {
@@ -1686,49 +1565,21 @@ acfs_report_success_if_clean() {
 print_resume_hint() {
     local failed_phase="${1:-}"
     local failed_step="${2:-}"
-    local resume_cmd=""
-    local resume_repo_owner="${ACFS_REPO_OWNER:-Dicklesworthstone}"
-    local resume_repo_name="${ACFS_REPO_NAME:-agentic_coding_flywheel_setup}"
-    if ! resume_cmd=$(generate_resume_hint "${failed_phase:-}" "${failed_step:-}" 2>/dev/null); then
-        if [[ -n "${SCRIPT_DIR:-}" ]] \
-            && [[ -z "${ACFS_VERIFIED_BOOTSTRAP_SOURCE:-}" ]]; then
-            local local_install
-            local_install="${SCRIPT_DIR%/}/install.sh"
-            printf -v local_install '%q' "$local_install"
-            resume_cmd="bash $local_install --resume --yes"
-        else
-            local fallback_ref="${ACFS_COMMIT_SHA_FULL:-${ACFS_REF_INPUT:-main}}"
-            local fallback_url="https://acfs.sh"
-            local fallback_url_q=""
-            if [[ "$resume_repo_owner" != "Dicklesworthstone" ]] \
-                || [[ "$resume_repo_name" != "agentic_coding_flywheel_setup" ]] \
-                || [[ "$fallback_ref" != "main" ]]; then
-                fallback_url="https://raw.githubusercontent.com/${resume_repo_owner}/${resume_repo_name}/${fallback_ref}/install.sh"
-            fi
-            printf -v fallback_url_q '%q' "$fallback_url"
-            resume_cmd="curl -q -fsSL $fallback_url_q | bash -p -s -- --resume --yes"
-        fi
-    fi
 
     log_info ""
     log_info "╔══════════════════════════════════════════════════════════════╗"
-    log_info "║  To resume installation from this point:                     ║"
+    log_info "║  LIC1+LIC2 HOLD: no restart command is authorized.           ║"
     log_info "╚══════════════════════════════════════════════════════════════╝"
     log_info ""
-    log_info "  $resume_cmd"
+    log_info "  LIC1 SHA-256: 9bfd85c340c6223482e07b96c668600e0db9a18b8a4f25e45f77f0129af63300"
+    log_info "  LIC2 SHA-256: 89b56c5a62cea238a9e9d3b6ff88a2923a88bafd45c982a523dba5c7de5b51ee"
+    log_info "  Express written permission is required before a held module may be inspected or commissioned."
     log_info ""
-
     if [[ -n "${failed_phase:-}" ]]; then
         log_detail "Failed phase: ${failed_phase:-}"
     fi
     if [[ -n "${failed_step:-}" ]]; then
         log_detail "Failed step: ${failed_step:-}"
-    fi
-
-    # Also persist the precise resume hint into state.json, but only through the
-    # state library so we keep same-directory atomic writes and target-user ownership.
-    if [[ -f "${ACFS_STATE_FILE:-}" ]] && type -t state_set_resume_hint &>/dev/null; then
-        state_set_resume_hint "${resume_cmd:-}" 2>/dev/null || true
     fi
 }
 
@@ -2055,10 +1906,24 @@ acfs_release_install_lock() {
 cleanup() {
     # Capture exit code FIRST, before any other commands can overwrite $?
     local exit_code=$?
+
+    # Failure cleanup is a moduleless lifecycle entry.  Rebind and reject it
+    # before changing shell/global state, inspecting temp/state/log paths, or
+    # invoking cleanup, receipt, notification, or fallback callbacks.
+    if ! acfs_enforce_early_license_exclusion failure-cleanup; then
+        return "$exit_code"
+    fi
+
     ACFS_CLEANUP_ACTIVE=true
 
     # Cleanup must never abort — disable errexit for the entire function.
     set +e
+
+    local r1_cleanup_admitted=false
+    if declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+        && acfs_r1_runtime_admit_entry failure-cleanup; then
+        r1_cleanup_admitted=true
+    fi
 
     if [[ "$BOOTSTRAP_ARCHIVE_FD" =~ ^[0-9]+$ ]]; then
         exec {BOOTSTRAP_ARCHIVE_FD}<&-
@@ -2099,15 +1964,11 @@ cleanup() {
         rm -f -- "$ACFS_TMP_INSTALL" 2>/dev/null || true
     fi
 
-    # If a signal triggered this cleanup, mark state as interrupted so
-    # resume logic does not see a partially-started phase.
-    if [[ -n "${_ACFS_SIGNAL_RECEIVED:-}" ]]; then
-        if type -t state_mark_interrupted &>/dev/null; then
-            state_mark_interrupted 2>/dev/null || true
-        fi
-    fi
+    # Signal and failure cleanup have no authority to rewrite state.json.
+    # The exact failing bytes remain available for independent diagnosis.
 
-    if [[ $exit_code -ne 0 && "${ACFS_BOOTSTRAP_SUPERVISOR:-false}" != "true" ]]; then
+    if [[ "$r1_cleanup_admitted" == "true" ]] \
+        && [[ $exit_code -ne 0 && "${ACFS_BOOTSTRAP_SUPERVISOR:-false}" != "true" ]]; then
         log_error ""
         if [[ "${SMOKE_TEST_FAILED:-false}" == "true" ]]; then
             log_error "ACFS installation completed, but the post-install smoke test failed."
@@ -2136,60 +1997,23 @@ cleanup() {
         fi
         print_resume_hint "${failed_phase:-}" "${failed_step:-}"
         log_error ""
-        # Read-only modes preserve the failing exit and terminal diagnostics,
-        # but must not persist receipts or contact notification endpoints. If
-        # the predicate is unavailable during an unusually early mutating
-        # failure, retain the historical best-effort failure receipt.
-        if ! declare -F acfs_is_read_only_mode >/dev/null 2>&1 \
-            || ! acfs_is_read_only_mode; then
-            acfs_summary_emit "failure" 0 2>/dev/null || true
-            # Send webhook notification for failure (bd-2zqr)
-            if type -t webhook_notify &>/dev/null; then
-                webhook_notify "failure" "${ACFS_SUMMARY_FILE:-}" 2>/dev/null || true
-            fi
-            # Send ntfy.sh notification for failure (bd-2igt6)
-            if type -t acfs_notify_install_failure &>/dev/null; then
-                acfs_notify_install_failure 2>/dev/null || true
-            fi
-        fi
+        # Failure receipts, webhooks, and notifications are out-of-plan
+        # lifecycle actions and remain mechanically blocked by R1.
     fi
 
-    # Operator hard requirement: no matter what fails during setup, skills
-    # must still install and onboarding instructions must still be shown.
-    # The normal main() flow now record-and-continues through phase/module
-    # failures so it always reaches the manifest-mapped stack.meta_skill installer and
-    # print_summary on its own — but if something dies in a way that bypasses
-    # that (an unhandled `set -e` exit, a signal, a bug), this is the last-
-    # resort net. Guarded by ACFS_SKILLS_AND_SUMMARY_DONE so a normal
-    # completion (which sets the flag itself) never runs this twice, and by
-    # ACFS_INSTALL_RUN_CONFIRMED so benign early exits (--help, --print,
-    # dry-run, user declined) never trigger it at all.
+    # Failure cleanup has no authority to install omitted stack.meta_skill or
+    # any other out-of-plan module. Record only an in-memory failure marker.
     if [[ "${ACFS_INSTALL_RUN_CONFIRMED:-0}" == "1" ]] && [[ "${ACFS_SKILLS_AND_SUMMARY_DONE:-0}" != "1" ]]; then
         ACFS_SKILLS_AND_SUMMARY_DONE=1
-        log_error "Installation ended before reaching normal completion; attempting best-effort skills install + onboarding summary anyway."
-        local skills_installer=""
-        local skills_map_decl=""
-        skills_map_decl="$(declare -p ACFS_MODULE_FUNC 2>/dev/null || true)"
-        if [[ "$skills_map_decl" == declare\ -A* ]]; then
-            skills_installer="${ACFS_MODULE_FUNC[stack.meta_skill]:-}"
-        fi
-        if [[ "${DRY_RUN:-false}" != "true" ]]; then
-            if [[ ! "$skills_installer" =~ ^acfs_generated_install_[a-z0-9_]+$ ]] \
-                || ! declare -f "$skills_installer" >/dev/null 2>&1; then
-                log_error "Manifest-mapped stack.meta_skill installer is unavailable during EXIT fallback"
-                ACFS_MODULE_FAILURES+=("stack.meta_skill (EXIT-trap fallback unavailable)")
-            elif ! "$skills_installer"; then
-                ACFS_MODULE_FAILURES+=("stack.meta_skill (EXIT-trap fallback attempt)")
-            fi
-        fi
-        if type -t print_summary &>/dev/null; then
-            print_summary || true
-        fi
+        log_error "R1 blocked failure-cleanup installation outside the exact eleven-module plan."
+        ACFS_MODULE_FAILURES+=("failure-cleanup (out-of-plan mutation blocked)")
     fi
 
     acfs_release_install_lock
     # Finalize log file (restore stderr, strip colors, add footer)
-    acfs_log_close 2>/dev/null || true
+    if ! acfs_is_read_only_mode; then
+        acfs_log_close 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 trap '_acfs_signal_handler TERM' TERM
@@ -2650,6 +2474,98 @@ normalize_read_only_modes() {
     esac
 }
 
+acfs_requested_license_lifecycle() {
+    if [[ "${LIST_MODULES:-false}" == "true" ]]; then
+        printf 'list\n'
+    elif [[ "${PRINT_PLAN_MODE:-false}" == "true" || "${DRY_RUN:-false}" == "true" ]]; then
+        printf 'plan\n'
+    elif [[ "${PRINT_MODE:-false}" == "true" ]]; then
+        printf 'print\n'
+    elif [[ "${RESET_STATE_ONLY:-false}" == "true" ]]; then
+        printf 'configuration\n'
+    elif [[ "${ACFS_FORCE_RESUME:-false}" == "true" ]]; then
+        printf 'resume\n'
+    else
+        printf 'install\n'
+    fi
+}
+
+# Enforce the finalized LIC1+LIC2 exclusion before bootstrap downloads,
+# manifest/index loading, helper sourcing, installed checks, or state handling.
+# Local checkouts verify the content-addressed exclusion payload from the exact
+# sibling contract.  A streamed verifier has no authenticated sibling contract
+# yet, so the only safe pre-bootstrap outcome is the same mechanical HOLD.
+acfs_enforce_early_license_exclusion() {
+    local entry="${1:-}"
+    local module_id="${2:-}"
+    local contract_path=""
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    if [[ -z "$entry" ]]; then
+        entry="$(acfs_requested_license_lifecycle)"
+    fi
+    ACFS_LICENSE_REQUESTED_LIFECYCLE="$entry"
+    export ACFS_LICENSE_REQUESTED_LIFECYCLE
+
+    if [[ -n "${SCRIPT_DIR:-}" ]]; then
+        contract_path="$SCRIPT_DIR/scripts/lib/contract.sh"
+        if [[ -L "$SCRIPT_DIR/scripts" || -L "$SCRIPT_DIR/scripts/lib" \
+            || ! -f "$contract_path" || -L "$contract_path" ]]; then
+            printf '%s\n' "ERROR: LIC1+LIC2 exclusion contract is missing or unsafe" >&2
+            return 1
+        fi
+
+        if ! builtin unset -f acfs_license_exclusion_profile_payload \
+            _acfs_license_profile_actual_sha256 \
+            acfs_license_policy_verify_profile \
+            acfs_license_policy_module_is_held \
+            acfs_license_policy_module_is_plain_mit_only \
+            acfs_license_policy_admit_entry \
+            acfs_r1_runtime_profile_payload \
+            _acfs_r1_sha256_file \
+            _acfs_r1_profile_actual_sha256 \
+            _acfs_r1_runtime_root \
+            _acfs_r1_verify_bound_file \
+            acfs_r1_runtime_verify_profile \
+            acfs_r1_runtime_module_is_held \
+            acfs_r1_runtime_module_is_planned \
+            acfs_r1_runtime_admit_entry \
+            _acfs_r1_array_csv \
+            acfs_r1_runtime_prepare_selection \
+            acfs_r1_runtime_validate_plan \
+            acfs_core_policy_enforce \
+            acfs_core_policy_reason \
+            acfs_core_policy_contract \
+            _acfs_core_policy_target_home \
+            acfs_core_policy_expected_binary_path \
+            acfs_core_policy_expected_bv_versioned_path \
+            acfs_core_policy_expected_binary_sha256 \
+            _acfs_core_policy_sha256_file \
+            _acfs_core_policy_version_output \
+            acfs_core_policy_admit_binary \
+            acfs_core_policy_admit_repair_source \
+            acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+            printf '%s\n' "ERROR: imported LIC1+LIC2 policy functions are not replaceable" >&2
+            return 1
+        fi
+        # shellcheck source=scripts/lib/contract.sh
+        builtin source "$contract_path" || return 1
+        if ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+            || ! acfs_r1_runtime_admit_entry "$entry" "$module_id"; then
+            printf 'ERROR: %s\n' \
+                "${ACFS_R1_POLICY_REASON:-${ACFS_LICENSE_POLICY_REASON:-R1/LIC1+LIC2 admission is unavailable}}" >&2
+            return 1
+        fi
+        return 0
+    fi
+
+    printf '%s\n' \
+        "ERROR: LIC1+LIC2 HOLD rejects streamed $entry before bootstrap; express written permission is absent" \
+        "LIC1 SHA-256: 9bfd85c340c6223482e07b96c668600e0db9a18b8a4f25e45f77f0129af63300" \
+        "LIC2 SHA-256: 89b56c5a62cea238a9e9d3b6ff88a2923a88bafd45c982a523dba5c7de5b51ee" >&2
+    return 1
+}
+
 command_exists() {
     local cmd="${1:-}"
 
@@ -2786,6 +2702,7 @@ export -f handle_autofix 2>/dev/null || true
 # Sets up paths for libs and generated scripts BEFORE sourcing them.
 # ============================================================
 detect_environment() {
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
     # Set lib and generated script directories based on context
     if [[ -n "${SCRIPT_DIR:-}" ]]; then
         # Local checkout mode. The canonical install.sh location is the sole
@@ -2825,6 +2742,55 @@ detect_environment() {
         exit 1
     fi
 
+    # Bind and enforce license policy before the internal checksum walk or any
+    # executable helper is sourced.  This direct-entry guard also protects
+    # callers that invoke detect_environment() outside main().
+    local _acfs_license_contract="$ACFS_LIB_DIR/contract.sh"
+    if [[ -L "$ACFS_LIB_DIR" || ! -f "$_acfs_license_contract" || -L "$_acfs_license_contract" ]]; then
+        echo "ERROR: LIC1+LIC2 exclusion contract is missing or unsafe" >&2
+        exit 1
+    fi
+    if ! builtin unset -f acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry \
+        _acfs_r1_array_csv \
+        acfs_r1_runtime_prepare_selection \
+        acfs_r1_runtime_validate_plan \
+        acfs_core_policy_enforce \
+        acfs_core_policy_reason \
+        acfs_core_policy_contract \
+        _acfs_core_policy_target_home \
+        acfs_core_policy_expected_binary_path \
+        acfs_core_policy_expected_bv_versioned_path \
+        acfs_core_policy_expected_binary_sha256 \
+        _acfs_core_policy_sha256_file \
+        _acfs_core_policy_version_output \
+        acfs_core_policy_admit_binary \
+        acfs_core_policy_admit_repair_source \
+        acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        echo "ERROR: imported LIC1+LIC2 policy functions are not replaceable" >&2
+        exit 1
+    fi
+    # shellcheck source=scripts/lib/contract.sh
+    builtin source "$_acfs_license_contract" || exit 1
+    if ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+        || ! acfs_r1_runtime_admit_entry "${ACFS_LICENSE_REQUESTED_LIFECYCLE:-install}"; then
+        echo "ERROR: ${ACFS_R1_POLICY_REASON:-${ACFS_LICENSE_POLICY_REASON:-R1/LIC1+LIC2 admission is unavailable}}" >&2
+        exit 1
+    fi
+
     local _ics_base=""
     if [[ -n "${ACFS_BOOTSTRAP_DIR:-}" ]]; then
         _ics_base="$ACFS_BOOTSTRAP_DIR"
@@ -2854,11 +2820,6 @@ detect_environment() {
         source "$ACFS_LIB_DIR/security.sh"
     fi
 
-    if [[ -f "$ACFS_LIB_DIR/contract.sh" ]]; then
-        # shellcheck source=scripts/lib/contract.sh
-        source "$ACFS_LIB_DIR/contract.sh"
-    fi
-
     if [[ -f "$ACFS_LIB_DIR/install_helpers.sh" ]]; then
         # shellcheck source=scripts/lib/install_helpers.sh
         # Internal helper-bootstrap control must never be supplied by the
@@ -2873,16 +2834,9 @@ detect_environment() {
         source "$ACFS_LIB_DIR/module_selector.sh"
     fi
 
-    # Generated manifest installers target Ubuntu/apt. On Arch-family systems
-    # route every category through the legacy (pacman-aware) paths instead of
-    # refactoring the generator system.
-    # acfs_use_generated_for_category is the canonical predicate (used by
-    # acfs_use_generated_for_module / acfs_get_module_installer);
-    # acfs_use_generated_category is its alias. Override both.
-    if [[ "${ACFS_DISTRO_FAMILY:-}" == "arch" ]] && declare -f acfs_use_generated_for_category >/dev/null 2>&1; then
-        acfs_use_generated_for_category() { return 1; }
-        acfs_use_generated_category() { return 1; }
-    fi
+    # R1 never replaces module-aware dispatch with an architecture-wide
+    # legacy body. The caller rejects unsupported Arch-family commissioning
+    # before any host mutation.
 
     if [[ -f "$ACFS_LIB_DIR/user.sh" ]]; then
         # shellcheck source=scripts/lib/user.sh
@@ -5358,6 +5312,8 @@ declare -A ACFS_UPSTREAM_SHA256=()
 ACFS_UPSTREAM_LOADED=false
 
 acfs_fetch_url_content() {
+    acfs_enforce_early_license_exclusion probe || return $?
+
     local url="$1"
 
     if [[ "$url" != https://* ]]; then
@@ -5406,6 +5362,8 @@ acfs_fetch_url_content() {
 # Uses ACFS_CHECKSUMS_REF to avoid stale checksums when ACFS_REF is pinned.
 # Uses the raw content header to get the file directly without base64 encoding.
 acfs_fetch_fresh_checksums_via_api() {
+    acfs_enforce_early_license_exclusion probe || return $?
+
     local api_url="https://api.github.com/repos/${ACFS_REPO_OWNER}/${ACFS_REPO_NAME}/contents/checksums.yaml?ref=${ACFS_CHECKSUMS_REF}"
 
     # Use application/vnd.github.raw to get raw file content directly (no base64)
@@ -5435,6 +5393,8 @@ acfs_fetch_fresh_checksums_via_api() {
 # Parse checksums.yaml content into associative arrays.
 # Takes YAML content as argument, populates ACFS_UPSTREAM_URLS and ACFS_UPSTREAM_SHA256.
 acfs_parse_checksums_content() {
+    acfs_enforce_early_license_exclusion helper || return $?
+
     local content="$1"
     local in_installers=false
     local installers_indent=0
@@ -5531,11 +5491,15 @@ acfs_parse_checksums_content() {
 }
 
 acfs_required_upstream_tools() {
+    acfs_enforce_early_license_exclusion list || return $?
+
     printf '%s\n' \
         antigravity atuin br bun caam cass claude cm dcg gemini_patch mcp_agent_mail ntm ohmyzsh ru rust slb ubs uv zoxide
 }
 
 acfs_validate_upstream_checksums() {
+    acfs_enforce_early_license_exclusion probe || return $?
+
     local missing_required_tools=false
     local tool
 
@@ -5550,6 +5514,8 @@ acfs_validate_upstream_checksums() {
 }
 
 acfs_load_upstream_checksums() {
+    acfs_enforce_early_license_exclusion helper || return $?
+
     if [[ "$ACFS_UPSTREAM_LOADED" == "true" ]]; then
         return 0
     fi
@@ -5630,6 +5596,8 @@ acfs_load_upstream_checksums() {
 }
 
 acfs_run_verified_upstream_script_as_target_with_env() {
+    acfs_enforce_early_license_exclusion install || return $?
+
     if [[ $# -lt 2 ]]; then
         log_error "acfs_run_verified_upstream_script_as_target_with_env requires a tool and runner"
         return 1
@@ -5766,6 +5734,8 @@ acfs_run_verified_upstream_script_as_target_with_env() {
 }
 
 acfs_run_verified_upstream_script_as_target() {
+    acfs_enforce_early_license_exclusion install || return $?
+
     if [[ $# -lt 2 ]]; then
         log_error "acfs_run_verified_upstream_script_as_target requires a tool and runner"
         return 1
@@ -9220,6 +9190,8 @@ install_cloud_db() {
 # Do not trust arbitrary inherited PATH entries here: they can point at tools from
 # the caller's shell instead of the target installation we are managing.
 binary_path() {
+    acfs_enforce_early_license_exclusion probe || return $?
+
     local name="${1:-}"
     local primary_bin=""
     local candidate=""
@@ -9257,26 +9229,23 @@ binary_path() {
 }
 
 binary_installed() {
+    acfs_enforce_early_license_exclusion probe || return $?
+
     local path=""
     path="$(binary_path "$1" 2>/dev/null || true)"
     [[ -n "$path" ]]
 }
 
 install_stack_phase() {
+    if ! declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+        || ! acfs_r1_runtime_admit_entry install; then
+        log_error "${ACFS_R1_POLICY_REASON:-R1 stack admission unavailable}"
+        return 1
+    fi
     set_phase "stack" "Agent Flywheel Stack"
     log_step "8/9" "Installing Agent Flywheel stack..."
 
-    # Install utils.* modules (category: tools, phase: 9) — bug #146 fix
-    # Run every category in this phase before deciding the phase result: a
-    # single failing utils.* module must not skip ntm, Agent Mail, the skills
-    # installer, br/bv, cass, cm, ... (the `|| return 1` short-circuit did
-    # exactly that once category failures started propagating).
     local stack_phase_rc=0
-    if acfs_use_generated_category "tools"; then
-        log_detail "Using generated installers for tools (phase 9)"
-        acfs_run_generated_category_phase "tools" "9" || stack_phase_rc=1
-    fi
-
     if acfs_use_generated_category "stack"; then
         log_detail "Using generated installers for stack (phase 9)"
         acfs_run_generated_category_phase "stack" "9" || stack_phase_rc=1
@@ -9285,6 +9254,9 @@ install_stack_phase() {
         fi
         return "$stack_phase_rc"
     fi
+
+    log_error "R1 requires generated, module-aware stack dispatch; legacy stack body is blocked"
+    return 1
 
     # NTM (Named Tmux Manager)
     if binary_installed "ntm"; then
@@ -9875,20 +9847,27 @@ UNIT_EOF
         log_error "${ACFS_CORE_POLICY_REASON:-Beads Rust core admission policy unavailable}"
         ACFS_MODULE_FAILURES+=("stack.beads_rust (core admission)")
         stack_phase_rc=1
-    elif _smoke_run_as_target "br --version 2>/dev/null | grep -Eq '(^|[[:space:]])v?0[.]5[.]3([[:space:]]|$)'"; then
+    elif declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \
+        && acfs_core_policy_admit_binary "stack.beads_rust" install \
+            "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123" \
+            "$TARGET_HOME/.local/bin/br"; then
         log_detail "Beads Rust v0.5.3 already installed"
     else
         log_detail "Installing Beads Rust"
-        try_step "Installing Beads Rust" acfs_run_verified_upstream_script_as_target "br" "bash" \
+        if try_step "Installing Beads Rust" acfs_run_verified_upstream_script_as_target "br" "bash" \
             --version v0.5.3 \
             --dest "$TARGET_HOME/.local/bin" \
             --artifact-url "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz" \
             --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb" \
-            || {
+            && acfs_core_policy_admit_binary "stack.beads_rust" install \
+                "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123" \
+                "$TARGET_HOME/.local/bin/br"; then
+            log_detail "Beads Rust exact binary admitted after install"
+        else
                 log_warn "Beads Rust installation may have failed"
                 ACFS_MODULE_FAILURES+=("stack.beads_rust (installer execution)")
                 stack_phase_rc=1
-            }
+        fi
     fi
 
     # The legacy phase delegates bv to the same generated, content-addressed
@@ -10332,6 +10311,11 @@ acfs_merge_existing_json_config_as_target() {
 }
 
 finalize() {
+    if ! declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+        || ! acfs_r1_runtime_admit_entry finalize; then
+        log_error "${ACFS_R1_POLICY_REASON:-R1 broad-finalize admission unavailable}"
+        return 1
+    fi
     set_phase "finalize" "Final Wiring"
     log_step "9/9" "Finalizing installation..."
 
@@ -10680,6 +10664,8 @@ EOF
 # Runs quick, automatic verification at the end of install.sh
 # ============================================================
 _smoke_target_path() {
+    acfs_enforce_early_license_exclusion helper || return $?
+
     local user_home="${TARGET_HOME:-}"
     if [[ -z "$user_home" ]]; then
         user_home="$(acfs_home_for_user "$TARGET_USER" || true)"
@@ -10693,6 +10679,8 @@ _smoke_target_path() {
 
 
 _smoke_run_as_target() {
+    acfs_enforce_early_license_exclusion probe || return $?
+
     local cmd="$1"
     local smoke_path=""
 
@@ -10701,6 +10689,8 @@ _smoke_run_as_target() {
 }
 
 acfs_smoke_install_fix_command() {
+    acfs_enforce_early_license_exclusion configuration || return $?
+
     local install_url="https://agent-flywheel.com/install"
     local install_url_q=""
     local flags=""
@@ -10728,6 +10718,8 @@ acfs_smoke_install_fix_command() {
 }
 
 run_smoke_test() {
+    acfs_enforce_early_license_exclusion doctor || return $?
+
     local critical_total=8
     local critical_passed=0
     local critical_failed=0
@@ -11279,6 +11271,13 @@ $summary_content"
 # Main
 # ============================================================
 main() {
+    # The finalized LIC1+LIC2 exclusion is the first operational decision.
+    # In particular, do not parse profiles/selectors, resolve refs or caches,
+    # print module/help data, or enter dry-run/resume/finalize paths first.
+    if ! acfs_enforce_early_license_exclusion install; then
+        return 1
+    fi
+
     parse_args "$@"
     acfs_require_ref_arg_value "ACFS_REF" "${ACFS_REF:-}" "main"
     acfs_require_ref_arg_value "ACFS_CHECKSUMS_REF" "${ACFS_CHECKSUMS_REF:-}" "main"
@@ -11351,6 +11350,48 @@ main() {
     # This must happen BEFORE any handlers that need module data
     detect_environment
 
+    if [[ "${ACFS_DISTRO_FAMILY:-ubuntu}" == "arch" ]]; then
+        log_error "R1 requires generated Ubuntu commissioning routes; architecture-forced legacy dispatch is rejected"
+        exit 1
+    fi
+    if [[ "${ACFS_INTERACTIVE:-false}" == "true" ]]; then
+        log_error "R1 rejects interactive or environment-derived selection; supply the exact six ordered --only seeds"
+        exit 1
+    fi
+
+    # Resolve and validate the exact content-addressed plan before the install
+    # lock, logs, state, preflight, or any installer can mutate the host.
+    acfs_apply_legacy_skips
+    if [[ -n "${ACFS_CLI_PROFILE:-}" ]]; then
+        acfs_apply_profile "$ACFS_CLI_PROFILE" || exit 1
+    fi
+    acfs_resolve_selection || exit 1
+    ACFS_R1_SELECTION_RESOLVED=true
+    export ACFS_R1_SELECTION_RESOLVED
+
+    # All preview/inventory modes leave pre-existing state byte-for-byte
+    # unchanged, including their EXIT and signal paths.
+    if [[ "$LIST_MODULES" == "true" ]]; then
+        list_modules
+        ACFS_SKILLS_AND_SUMMARY_DONE=1
+        exit 0
+    fi
+    if [[ "$PRINT_PLAN_MODE" == "true" || "$DRY_RUN" == "true" ]]; then
+        print_execution_plan
+        ACFS_SKILLS_AND_SUMMARY_DONE=1
+        exit 0
+    fi
+    if [[ "$PRINT_MODE" == "true" ]]; then
+        printf '%s\n' \
+            "R1 content-addressed install plan:" \
+            "  base.system, users.ubuntu, base.filesystem, cli.modern" \
+            "  lang.bun, lang.uv, lang.rust, lang.go" \
+            "  stack.mcp_agent_mail, stack.beads_rust, stack.beads_viewer" \
+            "MCP Agent Mail remains on C5 commissioning HOLD; no accepted exact capsule identity exists."
+        ACFS_SKILLS_AND_SUMMARY_DONE=1
+        exit 0
+    fi
+
     # Acquire install-wide flock to prevent concurrent install.sh processes.
     # Uses FD 199 (autofix.sh already uses FD 200 for its own lock).
     # Read-only modes (--list-modules, --print-plan, --dry-run, --print) skip locking.
@@ -11410,6 +11451,7 @@ main() {
         source_generated_installers
     fi
 
+    if [[ "${ACFS_R1_SELECTION_RESOLVED:-false}" != "true" ]]; then
     # Map legacy --skip-* flags to SKIP_MODULES (mjt.5.5)
     # This allows --skip-postgres, --skip-vault, --skip-cloud to work
     # through the manifest-driven selection engine
@@ -11435,6 +11477,7 @@ main() {
         if ! acfs_resolve_selection; then
             exit 1
         fi
+    fi
     fi
 
     # Handle --list-modules: print available modules and exit (mjt.5.3)
@@ -11503,8 +11546,9 @@ main() {
         exit 0
     fi
 
-    # Install gum FIRST so the entire script looks amazing
-    install_gum_early
+    # R1 excludes presentation bootstrapping from the commissioning plan.
+    # In particular, do not install gum before the admitted module graph runs.
+    log_debug "R1 excludes early gum installation"
 
     # Fetch commit SHA for version display
     fetch_commit_sha
@@ -11517,10 +11561,9 @@ main() {
         echo ""
     fi
 
-    # Run auto-fix checks before preflight (bd-19y9.3.4)
-    if [[ "$SKIP_PREFLIGHT" != "true" ]]; then
-        run_autofix_checks
-    fi
+    # Auto-fix is a mutation surface outside the exact R1 graph.  Preflight is
+    # deliberately read-only; remediation belongs to a separately admitted run.
+    log_debug "R1 excludes preflight auto-fix"
 
     # Run pre-flight validation (Phase 0)
     if [[ "$SKIP_PREFLIGHT" != "true" ]]; then
@@ -11609,7 +11652,7 @@ main() {
         fi
     fi
 
-    disable_needrestart_apt_hook  # Prevent apt hangs on Ubuntu 22.04+ (issue #70)
+    log_debug "R1 excludes needrestart configuration mutation"
     validate_target_user
     init_target_paths
     acfs_log_init   # Start capturing stderr to log file (uses ACFS_HOME/logs)
@@ -11620,19 +11663,9 @@ main() {
     # for state management during the upgrade process.
     ensure_base_deps
 
-    # ============================================================
-    # Ubuntu Auto-Upgrade Phase (nb4)
-    # ============================================================
-    # Run as "Phase -1" before all other phases.
-    # This may trigger a reboot and exit. After final reboot,
-    # the resume service will call install.sh again to continue.
-    # Skip when --only or --only-phase is specified, since the user
-    # is targeting a specific module on an already-installed system.
-    if [[ "${ACFS_EXPLICIT_TARGETED_SELECTION:-false}" != "true" ]]; then
-        run_ubuntu_upgrade_phase "$@"
-    else
-        log_debug "Skipping Ubuntu auto-upgrade (--only/--only-phase mode)"
-    fi
+    # OS upgrade and reboot/resume orchestration are outside the exact R1
+    # commissioning graph and cannot be reached from this runtime profile.
+    log_debug "R1 excludes Ubuntu auto-upgrade and reboot/resume orchestration"
 
     # ============================================================
     # State Management and Resume Logic (mjt.5.8)
@@ -11642,38 +11675,16 @@ main() {
     ACFS_STATE_FILE="${ACFS_STATE_FILE:-$ACFS_HOME/state.json}"
     export ACFS_HOME ACFS_STATE_FILE
 
-    # Validate and handle existing state file
-    if type -t state_ensure_valid &>/dev/null; then
-        if ! state_ensure_valid; then
-            log_error "State validation failed. Aborting."
-            exit 1
-        fi
+    # R1 permits only a fresh, exact-plan run.  Any pre-existing state would
+    # make selection or lifecycle behavior resume-derived, so fail before
+    # validating, repairing, backing up, or otherwise changing that state.
+    if [[ -e "$ACFS_STATE_FILE" || -L "$ACFS_STATE_FILE" ]]; then
+        log_error "R1 rejects pre-existing installer state and all resume-derived execution: $ACFS_STATE_FILE"
+        exit 1
     fi
-
-    # Check for resume scenario (if state functions available)
-    if type -t confirm_resume &>/dev/null; then
-        # Use || to capture non-zero exit codes without triggering set -e
-        # confirm_resume returns: 0=resume, 1=fresh install, 2=abort
-        local resume_result=0
-        confirm_resume || resume_result=$?
-        case $resume_result in
-            0) # Resume - state functions will skip completed phases
-                log_info "Resuming installation from last checkpoint..."
-                ;;
-            1) # Fresh install - confirm before proceeding, then initialize state
-                confirm_or_exit
-                if type -t state_init &>/dev/null; then
-                    state_init
-                fi
-                ;;
-            2) # Abort
-                log_info "Installation aborted by user."
-                exit 0
-                ;;
-        esac
-    else
-        # Fallback: use original confirm_or_exit
-        confirm_or_exit
+    confirm_or_exit
+    if type -t state_init &>/dev/null; then
+        state_init
     fi
 
     # From here on the user has confirmed a real install: the cleanup() EXIT
@@ -11702,7 +11713,7 @@ main() {
 
             # Show progress header before running phase
             if type -t show_progress_header &>/dev/null; then
-                show_progress_header "$phase_num" 9 "$phase_name" "$installation_start_time" "$phase_id"
+                show_progress_header "$phase_num" 5 "$phase_name" "$installation_start_time" "$phase_id"
             fi
 
             # Record-and-continue: a failing phase must not abort the run, or
@@ -11714,7 +11725,7 @@ main() {
                 if ! run_phase "$phase_id" "$phase_display" "$phase_func"; then
                     # Use structured error reporting
                     if type -t report_failure &>/dev/null; then
-                        report_failure "$phase_num" 9
+                        report_failure "$phase_num" 5
                     else
                         log_error "Phase $phase_display failed"
                     fi
@@ -11734,65 +11745,27 @@ main() {
             fi
         }
 
-        _run_phase_with_report "user_setup" "1/9 User Setup" normalize_user || true
-        _run_phase_with_report "filesystem" "2/9 Filesystem" setup_filesystem || true
-        _run_phase_with_report "shell_setup" "3/9 Shell Setup" setup_shell || true
-        _run_phase_with_report "cli_tools" "4/9 CLI Tools" install_cli_tools || true
-        _run_phase_with_report "languages" "5/9 Languages" install_languages || true
-        _run_phase_with_report "agents" "6/9 Coding Agents" install_agents_phase || true
-        _run_phase_with_report "cloud_db" "7/9 Cloud & DB" install_cloud_db || true
-        _run_phase_with_report "stack" "8/9 Stack" install_stack_phase || true
-        _run_phase_with_report "finalize" "9/9 Finalize" finalize || true
+        _run_phase_with_report "user_setup" "1/5 User Setup" normalize_user || true
+        _run_phase_with_report "filesystem" "2/5 Filesystem" setup_filesystem || true
+        _run_phase_with_report "cli_tools" "3/5 CLI Tools" install_cli_tools || true
+        _run_phase_with_report "languages" "4/5 Languages" install_languages || true
+        _run_phase_with_report "stack" "5/5 Stack" install_stack_phase || true
 
-        # Always update manifest, checksums.yaml, and VERSION after all phases complete
-        # This ensures resume installs get fresh metadata even if finalize was previously completed
-        # Related: PR #44 - fix checksums.yaml becoming stale on resume installs
-        local metadata_source_root="${SCRIPT_DIR:-${ACFS_BOOTSTRAP_DIR:-}}"
-        if [[ -n "$metadata_source_root" ]] && [[ -d "$metadata_source_root" ]]; then
-            if [[ -f "$metadata_source_root/checksums.yaml" ]]; then
-                log_detail "Ensuring checksums.yaml is up to date"
-                install_checksums_yaml "$ACFS_HOME/checksums.yaml" || true
-                $SUDO chown "$TARGET_USER:$TARGET_USER" "$ACFS_HOME/checksums.yaml" 2>/dev/null || true
-            fi
-            if [[ -f "$metadata_source_root/VERSION" ]]; then
-                log_detail "Ensuring VERSION is up to date"
-                install_asset "VERSION" "$ACFS_HOME/VERSION" || true
-                $SUDO chown "$TARGET_USER:$TARGET_USER" "$ACFS_HOME/VERSION" 2>/dev/null || true
-            fi
-            if [[ -f "$metadata_source_root/acfs.manifest.yaml" ]]; then
-                log_detail "Ensuring acfs.manifest.yaml is up to date"
-                install_asset "acfs.manifest.yaml" "$ACFS_HOME/acfs.manifest.yaml" || true
-                $SUDO chown "$TARGET_USER:$TARGET_USER" "$ACFS_HOME/acfs.manifest.yaml" 2>/dev/null || true
-            fi
-        fi
+        # Runtime metadata publication is a finalize action and therefore held.
+        # The repository artifacts are sealed deterministically before this run.
+        log_debug "R1 excludes runtime metadata publication"
 
-        # Skip the post-install smoke test when --only / --only-phase was
-        # used: the user asked for a targeted subset, so the full-stack
-        # checks (agents, ntm, onboard, languages, …) will fail by design.
-        # They can still run `acfs doctor` if they want a broader health check.
-        SMOKE_TEST_FAILED=false
-        if [[ ${#ONLY_MODULES[@]} -eq 0 ]] && [[ ${#ONLY_PHASES[@]} -eq 0 ]]; then
-            if ! run_smoke_test; then
-                SMOKE_TEST_FAILED=true
-            fi
-        else
-            log_debug "Skipping post-install smoke test (--only/--only-phase mode)"
-        fi
-
-        # Decide terminal status before emitting any completion UI, success
-        # artifact, webhook, or notification. This includes smoke-test failure,
-        # which used to be discovered only after success was already sent.
-        local installation_end_time total_seconds
-        installation_end_time=$(date +%s)
-        total_seconds=$((installation_end_time - installation_start_time))
-        acfs_report_success_if_clean "$total_seconds"
+        # Broad smoke tests, success artifacts, webhooks, and completion
+        # notifications are finalize surfaces.  R1 deliberately reaches no
+        # success claim while the Agent Mail C5 hold remains active.
+        log_debug "R1 excludes broad smoke tests and success-side effects"
     fi
 
     # Normal completion path reached: the phase loop above already gave the
     # "stack" phase (which installs skills via its manifest-mapped installer) its
     # chance to run, so the EXIT-trap fallback in cleanup() must not repeat it.
     ACFS_SKILLS_AND_SUMMARY_DONE=1
-    print_summary
+    log_info "Exact R1 module phases ended; MCP Agent Mail remains on C5 commissioning HOLD"
 
     if acfs_install_run_has_failures; then
         exit 1

@@ -67,6 +67,42 @@ const CORE_POLICY_CONTRACTS: Readonly<Record<string, string>> = {
     'source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv',
 };
 
+const CANONICAL_POLICY_FUNCTIONS = [
+  'acfs_require_contract',
+  'acfs_license_exclusion_profile_payload',
+  '_acfs_license_profile_actual_sha256',
+  'acfs_license_policy_verify_profile',
+  'acfs_license_policy_module_is_held',
+  'acfs_license_policy_module_is_plain_mit_only',
+  'acfs_license_policy_admit_entry',
+  'acfs_r1_runtime_profile_payload',
+  '_acfs_r1_sha256_file',
+  '_acfs_r1_profile_actual_sha256',
+  '_acfs_r1_runtime_root',
+  '_acfs_r1_verify_bound_file',
+  'acfs_r1_runtime_verify_profile',
+  'acfs_r1_runtime_module_is_held',
+  'acfs_r1_runtime_module_is_planned',
+  'acfs_r1_runtime_admit_entry',
+  '_acfs_r1_array_csv',
+  'acfs_r1_runtime_prepare_selection',
+  'acfs_r1_runtime_validate_plan',
+  'acfs_core_policy_enforce',
+  'acfs_core_policy_reason',
+  'acfs_core_policy_contract',
+  '_acfs_core_policy_target_home',
+  'acfs_core_policy_expected_binary_path',
+  'acfs_core_policy_expected_bv_versioned_path',
+  'acfs_core_policy_expected_binary_sha256',
+  '_acfs_core_policy_sha256_file',
+  '_acfs_core_policy_version_output',
+  'acfs_core_policy_admit_binary',
+  'acfs_core_policy_admit_repair_source',
+  'acfs_core_policy_enforce_installer_execution',
+] as const;
+
+const CANONICAL_POLICY_FUNCTIONS_BASH = CANONICAL_POLICY_FUNCTIONS.join(' ');
+
 export function findUnexpectedGeneratedPaths(
   expectedPaths: Iterable<string>,
   actualPaths: Iterable<string>,
@@ -2257,6 +2293,30 @@ export function generateCategoryScript(manifest: Manifest, category: ModuleCateg
     lines.push(`# ${sanitizeForBashComment(module.description)}${pluginComment}`);
     lines.push(`${funcName}() {`);
     lines.push(`    local module_id="${module.id}"`);
+    lines.push('    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"');
+    lines.push('    # Rebind the exact sibling contract at every generated entry. Imported');
+    lines.push('    # shell functions and environment state are never commissioning authority.');
+    lines.push('    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then');
+    lines.push(`        log_error "${module.id}: canonical runtime contract unavailable"`);
+    lines.push('        return 1');
+    lines.push('    fi');
+    lines.push(`    if ! builtin unset -f ${CANONICAL_POLICY_FUNCTIONS_BASH} 2>/dev/null; then`);
+    lines.push(`        log_error "${module.id}: imported runtime policy function is not replaceable"`);
+    lines.push('        return 1');
+    lines.push('    fi');
+    lines.push('    # shellcheck disable=SC1090  # exact generated sibling');
+    lines.push('    if ! builtin source "$canonical_contract"; then');
+    lines.push(`        log_error "${module.id}: canonical runtime contract could not be loaded"`);
+    lines.push('        return 1');
+    lines.push('    fi');
+    lines.push('    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then');
+    lines.push(`        log_error "${module.id}: exact R1 runtime profile unavailable"`);
+    lines.push('        return 1');
+    lines.push('    fi');
+    lines.push('    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then');
+    lines.push(`        log_error "${module.id}: \${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"`);
+    lines.push('        return 1');
+    lines.push('    fi');
     lines.push('    acfs_require_contract "module:${module_id}" || return 1');
     lines.push('    acfs_generated_ensure_selection || return 1');
     lines.push('    if ! should_run_module "${module_id}"; then');
@@ -2269,11 +2329,24 @@ export function generateCategoryScript(manifest: Manifest, category: ModuleCateg
     const corePolicyContract = CORE_POLICY_CONTRACTS[module.id];
     if (corePolicyContract !== undefined) {
       lines.push('    # Core commissioning modules share one fail-closed admission policy.');
-      lines.push('    if ! acfs_security_init; then');
-      lines.push(`        log_error "${module.id}: security policy unavailable"`);
+      if (module.id !== 'stack.mcp_agent_mail') {
+        lines.push('    if ! acfs_security_init; then');
+        lines.push(`        log_error "${module.id}: security policy unavailable"`);
+        lines.push('        return 1');
+        lines.push('    fi');
+      }
+      lines.push('    # Rebind after every mutable helper call so an ambient function cannot');
+      lines.push('    # shadow the final core decision. Agent Mail reaches this before security.');
+      lines.push(`    builtin unset -f ${CANONICAL_POLICY_FUNCTIONS_BASH} 2>/dev/null || {`);
+      lines.push(`        log_error "${module.id}: imported core policy function is not replaceable"`);
+      lines.push('        return 1');
+      lines.push('    }');
+      lines.push('    # shellcheck disable=SC1090  # exact generated sibling');
+      lines.push('    if ! builtin source "$canonical_contract"; then');
+      lines.push(`        log_error "${module.id}: canonical runtime contract could not be rebound"`);
       lines.push('        return 1');
       lines.push('    fi');
-      lines.push('    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1; then');
+      lines.push('    if ! builtin declare -F acfs_core_policy_enforce >/dev/null 2>&1; then');
       lines.push(`        log_error "${module.id}: core admission policy unavailable"`);
       lines.push('        return 1');
       lines.push('    fi');
@@ -2291,6 +2364,21 @@ export function generateCategoryScript(manifest: Manifest, category: ModuleCateg
     // Install commands
     lines.push(...generateInstallCommands(module));
     lines.push('');
+
+    if (module.id === 'stack.beads_rust' || module.id === 'stack.beads_viewer') {
+      const binaryName = module.id === 'stack.beads_rust' ? 'br' : 'bv';
+      lines.push('    # A version string is not an installed-state or post-install identity.');
+      lines.push('    if ! declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \\');
+      lines.push(
+        `        || ! acfs_core_policy_admit_binary "${module.id}" install ${shellQuote(corePolicyContract ?? '')} "$TARGET_HOME/.local/bin/${binaryName}"; then`
+      );
+      lines.push(
+        `        log_error "${module.id}: \${ACFS_CORE_POLICY_REASON:-exact binary identity rejected}"`
+      );
+      lines.push('        return 1');
+      lines.push('    fi');
+      lines.push('');
+    }
 
     // Verify commands
     lines.push('    # Verify');

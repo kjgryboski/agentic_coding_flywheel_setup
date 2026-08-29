@@ -355,6 +355,30 @@ acfs_security_init() {
 # PostgreSQL 18
 acfs_generated_install_db_postgres18() {
     local module_id="db.postgres18"
+    local canonical_contract="${ACFS_GENERATED_SCRIPT_DIR}/../lib/contract.sh"
+    # Rebind the exact sibling contract at every generated entry. Imported
+    # shell functions and environment state are never commissioning authority.
+    if [[ ! -f "$canonical_contract" || -L "$canonical_contract" ]]; then
+        log_error "db.postgres18: canonical runtime contract unavailable"
+        return 1
+    fi
+    if ! builtin unset -f acfs_require_contract acfs_license_exclusion_profile_payload _acfs_license_profile_actual_sha256 acfs_license_policy_verify_profile acfs_license_policy_module_is_held acfs_license_policy_module_is_plain_mit_only acfs_license_policy_admit_entry acfs_r1_runtime_profile_payload _acfs_r1_sha256_file _acfs_r1_profile_actual_sha256 _acfs_r1_runtime_root _acfs_r1_verify_bound_file acfs_r1_runtime_verify_profile acfs_r1_runtime_module_is_held acfs_r1_runtime_module_is_planned acfs_r1_runtime_admit_entry _acfs_r1_array_csv acfs_r1_runtime_prepare_selection acfs_r1_runtime_validate_plan acfs_core_policy_enforce acfs_core_policy_reason acfs_core_policy_contract _acfs_core_policy_target_home acfs_core_policy_expected_binary_path acfs_core_policy_expected_bv_versioned_path acfs_core_policy_expected_binary_sha256 _acfs_core_policy_sha256_file _acfs_core_policy_version_output acfs_core_policy_admit_binary acfs_core_policy_admit_repair_source acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        log_error "db.postgres18: imported runtime policy function is not replaceable"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # exact generated sibling
+    if ! builtin source "$canonical_contract"; then
+        log_error "db.postgres18: canonical runtime contract could not be loaded"
+        return 1
+    fi
+    if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" ]] || ! builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1; then
+        log_error "db.postgres18: exact R1 runtime profile unavailable"
+        return 1
+    fi
+    if ! acfs_r1_runtime_admit_entry direct "${module_id}"; then
+        log_error "db.postgres18: ${ACFS_R1_POLICY_REASON:-R1 runtime admission rejected the module}"
+        return 1
+    fi
     acfs_require_contract "module:${module_id}" || return 1
     acfs_generated_ensure_selection || return 1
     if ! should_run_module "${module_id}"; then

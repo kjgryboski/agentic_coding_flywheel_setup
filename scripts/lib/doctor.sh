@@ -7,6 +7,72 @@
 # Uses gum for enhanced terminal UI when available
 # ============================================================
 
+# Doctor ordinarily performs extensive target-home, state, PATH, generated
+# check, binary, service, and version discovery while loading.  The finalized
+# license exclusion must precede all of it, including direct sourcing.  Resolve
+# only this script's physical sibling contract with shell builtins, replace any
+# inherited policy functions, and stop while the moduleless doctor entry is
+# held.
+_ACFS_DOCTOR_EARLY_SOURCE="${BASH_SOURCE[0]}"
+_ACFS_DOCTOR_EARLY_DIR="${_ACFS_DOCTOR_EARLY_SOURCE%/*}"
+[[ "$_ACFS_DOCTOR_EARLY_DIR" != "$_ACFS_DOCTOR_EARLY_SOURCE" ]] || _ACFS_DOCTOR_EARLY_DIR="."
+_ACFS_DOCTOR_EARLY_DIR="$(builtin cd "$_ACFS_DOCTOR_EARLY_DIR" 2>/dev/null && builtin pwd -P)" \
+    || return 1 2>/dev/null || exit 1
+
+_acfs_doctor_early_admit() {
+    local contract_script="$_ACFS_DOCTOR_EARLY_DIR/contract.sh"
+    local policy_function=""
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    [[ ! -L "$_ACFS_DOCTOR_EARLY_DIR" && -f "$contract_script" && ! -L "$contract_script" ]] || return 1
+    for policy_function in \
+        acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry \
+        _acfs_r1_array_csv \
+        acfs_r1_runtime_prepare_selection \
+        acfs_r1_runtime_validate_plan \
+        acfs_core_policy_enforce \
+        acfs_core_policy_reason \
+        acfs_core_policy_contract \
+        _acfs_core_policy_target_home \
+        acfs_core_policy_expected_binary_path \
+        acfs_core_policy_expected_bv_versioned_path \
+        acfs_core_policy_expected_binary_sha256 \
+        _acfs_core_policy_sha256_file \
+        _acfs_core_policy_version_output \
+        acfs_core_policy_admit_binary \
+        acfs_core_policy_admit_repair_source \
+        acfs_core_policy_enforce_installer_execution; do
+        if builtin declare -F "$policy_function" >/dev/null 2>&1; then
+            builtin unset -f "$policy_function" 2>/dev/null || return 1
+        fi
+    done
+    # shellcheck source=contract.sh
+    builtin source "$contract_script" || return 1
+    builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+        && acfs_r1_runtime_admit_entry doctor
+}
+
+if ! _acfs_doctor_early_admit; then
+    builtin printf 'ERROR: %s\n' "${ACFS_R1_POLICY_REASON:-canonical R1 doctor admission unavailable}" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
+unset _ACFS_DOCTOR_EARLY_SOURCE _ACFS_DOCTOR_EARLY_DIR
+
 ACFS_VERSION="${ACFS_VERSION:-0.1.0}"
 
 # A direct root invocation must not resolve or source target-user code before
@@ -506,6 +572,57 @@ _acfs_doctor_source_first() {
     return 0
 }
 
+_acfs_doctor_rebind_canonical_contract() {
+    local contract_script="$SCRIPT_DIR/contract.sh"
+    local policy_function=""
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    if [[ ! -f "$contract_script" || -L "$contract_script" ]]; then
+        printf 'ERROR: canonical ACFS doctor contract unavailable: %s\n' "$contract_script" >&2
+        return 1
+    fi
+    for policy_function in \
+        acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry \
+        _acfs_r1_array_csv \
+        acfs_r1_runtime_prepare_selection \
+        acfs_r1_runtime_validate_plan \
+        acfs_core_policy_enforce \
+        acfs_core_policy_reason \
+        acfs_core_policy_contract \
+        _acfs_core_policy_target_home \
+        acfs_core_policy_expected_binary_path \
+        acfs_core_policy_expected_bv_versioned_path \
+        acfs_core_policy_expected_binary_sha256 \
+        _acfs_core_policy_sha256_file \
+        _acfs_core_policy_version_output \
+        acfs_core_policy_admit_binary \
+        acfs_core_policy_admit_repair_source \
+        acfs_core_policy_enforce_installer_execution; do
+        if builtin declare -F "$policy_function" >/dev/null 2>&1; then
+            builtin unset -f "$policy_function" 2>/dev/null || return 1
+        fi
+    done
+    # shellcheck source=contract.sh
+    builtin source "$contract_script" || return 1
+    [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" == "R1-held-module-exclusion-runtime-v1" ]] \
+        && builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+        && builtin declare -F acfs_core_policy_enforce >/dev/null 2>&1
+}
+
 if ! type -t log_error >/dev/null 2>&1; then
     log_step() { echo "[*] $*" >&2; }
     log_section() { echo "" >&2; echo "=== $* ===" >&2; }
@@ -796,7 +913,7 @@ fi
 _acfs_doctor_source_first "output.sh" || true
 _acfs_doctor_source_first "progress.sh" || true
 _acfs_doctor_source_first "gum_ui.sh" || true
-_acfs_doctor_source_first "contract.sh" || true
+_acfs_doctor_rebind_canonical_contract || return 1 2>/dev/null || exit 1
 
 # Source doctor_fix after target-home resolution so its autofix state and
 # helper lookups cannot be steered by a stale caller ACFS_HOME.
@@ -888,6 +1005,8 @@ agent_mail_doctor_check_json() {
     local result=""
     local am_bin=""
 
+    _acfs_doctor_rebind_canonical_contract || return 1
+    acfs_core_policy_enforce "stack.mcp_agent_mail" doctor "" || return 1
     am_bin="$(doctor_agent_mail_cli_path 2>/dev/null || true)"
     [[ -n "$am_bin" ]] || return 1
 
@@ -908,6 +1027,8 @@ agent_mail_doctor_check_json() {
 agent_mail_doctor_is_healthy() {
     local doctor_json="${1:-}"
 
+    _acfs_doctor_rebind_canonical_contract || return 1
+    acfs_core_policy_enforce "stack.mcp_agent_mail" doctor "" || return 1
     [[ -n "$doctor_json" ]] || return 1
 
     if command -v jq &>/dev/null; then
@@ -922,6 +1043,8 @@ agent_mail_doctor_summary() {
     local doctor_json="${1:-}"
     local summary=""
 
+    _acfs_doctor_rebind_canonical_contract || return 1
+    acfs_core_policy_enforce "stack.mcp_agent_mail" doctor "" || return 1
     [[ -n "$doctor_json" ]] || return 1
 
     if command -v jq &>/dev/null; then
@@ -966,20 +1089,31 @@ agent_mail_doctor_summary() {
 # not already covered by the bespoke check functions below.
 # ============================================================
 MANIFEST_CHECKS_LOADED=false
+MANIFEST_CHECKS_LOAD_ERROR="generated doctor checks are missing"
 
 # Source at top level (not inside a function) because doctor_checks.sh uses
 # "declare -a MANIFEST_CHECKS=(...)" which bash scopes as local inside a
 # function.  Top-level sourcing keeps the array globally visible.
 _MANIFEST_CHECKS_FILE=""
-_MANIFEST_CHECKS_FILE="$(_acfs_doctor_find_project_path "scripts/generated/doctor_checks.sh" 2>/dev/null || true)"
+if _acfs_doctor_rebind_canonical_contract \
+    && acfs_r1_runtime_admit_entry doctor; then
+    _MANIFEST_CHECKS_FILE="$(_acfs_doctor_find_project_path "scripts/generated/doctor_checks.sh" 2>/dev/null || true)"
+else
+    MANIFEST_CHECKS_LOAD_ERROR="${ACFS_R1_POLICY_REASON:-canonical R1 doctor admission unavailable}"
+fi
 
 if [[ -n "$_MANIFEST_CHECKS_FILE" ]]; then
     # Save shell options before sourcing (doctor_checks.sh sets -euo pipefail)
     _MANIFEST_SAVED_OPTS=$(set +o)
 
     # shellcheck source=/dev/null
-    if source "$_MANIFEST_CHECKS_FILE" 2>/dev/null; then
+    if source "$_MANIFEST_CHECKS_FILE" 2>/dev/null \
+        && declare -p MANIFEST_CHECKS >/dev/null 2>&1 \
+        && [[ ${#MANIFEST_CHECKS[@]} -gt 0 ]]; then
         MANIFEST_CHECKS_LOADED=true
+        MANIFEST_CHECKS_LOAD_ERROR=""
+    else
+        MANIFEST_CHECKS_LOAD_ERROR="generated doctor checks are empty or could not be sourced"
     fi
 
     # Restore original shell options
@@ -1962,6 +2096,8 @@ doctor_binary_exists() {
 }
 
 doctor_agent_mail_cli_path() {
+    _acfs_doctor_rebind_canonical_contract || return 1
+    acfs_core_policy_enforce "stack.mcp_agent_mail" doctor "" || return 1
     doctor_binary_path "am"
 }
 # Try to retrieve a reasonably informative version line for a command without
@@ -2537,6 +2673,14 @@ check_stack() {
     local br_contract="source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
     local bv_contract="source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv"
 
+    # Retain the historical function name for callers, but route it through
+    # the exact R1 implementation. None of the legacy out-of-plan probes below
+    # are reachable while this commissioning profile is active.
+    _acfs_doctor_rebind_canonical_contract || return 1
+    acfs_r1_runtime_admit_entry doctor || return 1
+    check_r1_stack
+    return $?
+
     section "Agent Flywheel stack"
 
     check_command "stack.ntm" "NTM" "ntm" \
@@ -3025,6 +3169,39 @@ check_utilities() {
 # ============================================================
 # Manifest Supplemental Checks (bd-31ps.5.1)
 # ============================================================
+
+check_r1_stack() {
+    local module_id=""
+    local supplied_contract=""
+    local binary_path=""
+
+    section "Exact R1 stack"
+
+    # The missing future C5 capsule is checked before any Agent Mail command,
+    # socket, service, database, or health endpoint.
+    if acfs_core_policy_enforce stack.mcp_agent_mail doctor ""; then
+        check "stack.mcp_agent_mail" "MCP Agent Mail" "fail" \
+            "unexpected admission without an accepted exact C5 capsule"
+    else
+        check "stack.mcp_agent_mail" "MCP Agent Mail" "fail" \
+            "${ACFS_CORE_POLICY_REASON:-C5 commissioning HOLD}"
+    fi
+
+    for module_id in stack.beads_rust stack.beads_viewer; do
+        supplied_contract="$(acfs_core_policy_contract "$module_id" 2>/dev/null || true)"
+        binary_path="$(acfs_core_policy_expected_binary_path "$module_id" 2>/dev/null || true)"
+        if [[ -n "$supplied_contract" && -n "$binary_path" ]] \
+            && acfs_core_policy_admit_binary \
+                "$module_id" doctor "$supplied_contract" "$binary_path"; then
+            check "$module_id" "$module_id" "pass" "exact canonical binary identity admitted"
+        else
+            check "$module_id" "$module_id" "fail" \
+                "${ACFS_CORE_POLICY_REASON:-exact canonical binary identity rejected}"
+        fi
+    done
+    blank_line
+}
+
 # Runs manifest-derived checks for tools NOT already covered by the bespoke
 # check functions above.  This fills gaps (lazygit, nvm, apr, jfp, pt, srps,
 # all utils.*, acfs.*, base.system.*) without duplicating bespoke output.
@@ -3269,13 +3446,26 @@ _doctor_run_manifest_check() {
 # are indistinguishable from hand-written checks.  Failed checks include a
 # copy-pasteable fix suggestion using the manifest-bound ACFS installer.
 check_manifest_supplemental() {
-    [[ "$MANIFEST_CHECKS_LOADED" == "true" ]] || return 0
-    [[ ${#MANIFEST_CHECKS[@]} -gt 0 ]] || return 0
+    if [[ "$MANIFEST_CHECKS_LOADED" != "true" ]] \
+        || ! declare -p MANIFEST_CHECKS >/dev/null 2>&1 \
+        || [[ ${#MANIFEST_CHECKS[@]} -eq 0 ]]; then
+        check "manifest.generated" "Generated doctor checks" "fail" \
+            "${MANIFEST_CHECKS_LOAD_ERROR:-generated doctor checks are unavailable}"
+        return 1
+    fi
 
     local printed_section=false
 
     for entry in "${MANIFEST_CHECKS[@]}"; do
         IFS=$'\t' read -r id desc cmd req_flag run_as <<< "$entry"
+
+        local module_id
+        module_id="$(_manifest_module_id "$id")"
+        if ! acfs_r1_runtime_admit_entry doctor "$module_id"; then
+            # Generated data covers the whole historical manifest; R1 permits
+            # execution only for its exact eleven-module closure.
+            continue
+        fi
 
         # Skip checks already covered by bespoke functions
         _is_bespoke_covered "$id" && continue
@@ -3307,8 +3497,6 @@ check_manifest_supplemental() {
         esac
 
         # Build per-module fix suggestion for failed/warn checks (bd-31ps.5.2)
-        local module_id
-        module_id=$(_manifest_module_id "$id")
         local fix
         fix="$(fix_for_module "$module_id")"
 
@@ -4649,11 +4837,25 @@ EOF
 
 # Main
 main() {
-    local invoked_as
+    local invoked_as=""
+    local subcmd="${1:-}"
+
+    if ! _acfs_doctor_rebind_canonical_contract \
+        || ! acfs_r1_runtime_admit_entry doctor; then
+        echo "Error: ${ACFS_R1_POLICY_REASON:-canonical R1 doctor admission unavailable}" >&2
+        return 1
+    fi
+
     invoked_as="$(basename "${0:-acfs}")"
 
     # If installed as `acfs`, support the unified CLI subcommands.
-    local subcmd="${1:-}"
+    case "$subcmd" in
+        ""|doctor|check|help|-h|version|-v|--version|--*) ;;
+        *)
+            echo "Error: R1 rejects out-of-plan acfs lifecycle command: $subcmd" >&2
+            return 1
+            ;;
+    esac
     case "$subcmd" in
         doctor|check)
             shift
@@ -5305,14 +5507,23 @@ main() {
         esac
     done
 
+    if [[ "$DEEP_MODE" == "true" ]]; then
+        echo "Error: R1 rejects --deep because it probes held and out-of-plan lifecycle surfaces" >&2
+        return 1
+    fi
+
+    if [[ "$FIX_MODE" == "true" ]] \
+        && ! acfs_r1_runtime_admit_entry doctor-fix; then
+        echo "Error: ${ACFS_R1_POLICY_REASON:-R1 doctor-fix admission unavailable}" >&2
+        return 1
+    fi
+
     # --quiet: exit code only. This must precede the banner below, not just
     # the checks — the first cut redirected right before check_identity and
     # the gum banner box still reached stdout. Genuine errors keep stderr.
     if [[ "$QUIET_MODE" == "true" ]]; then
         exec 1>/dev/null
     fi
-
-    local_progress_record_doctor_invoked "$DEEP_MODE" "$FIX_MODE" "$DRY_RUN_MODE" "$JSON_MODE" 2>/dev/null || true
 
     if [[ "$JSON_MODE" != "true" ]]; then
         local os_pretty="unknown"
@@ -5359,19 +5570,9 @@ $(gum style --foreground "$ACFS_MUTED" "OS:") $(gum style --foreground "$ACFS_TE
 
     check_identity
     check_workspace
-    check_shell
     check_core_tools
-    check_agents
-    check_cloud
-    check_stack
-    check_utilities
+    check_r1_stack
     check_manifest_supplemental
-    show_skipped_tools
-
-    # Run deep checks if --deep flag was provided
-    if [[ "$DEEP_MODE" == "true" ]]; then
-        run_deep_checks
-    fi
 
     if [[ "$JSON_MODE" == "true" ]]; then
         print_json

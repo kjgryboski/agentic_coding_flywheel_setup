@@ -10,6 +10,62 @@
 
 INSTALL_HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+_acfs_install_helpers_rebind_canonical_contract() {
+    local contract_path="$INSTALL_HELPERS_DIR/contract.sh"
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    [[ ! -L "$INSTALL_HELPERS_DIR" && -f "$contract_path" && ! -L "$contract_path" ]] || return 1
+    if ! builtin unset -f acfs_require_contract \
+        acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry \
+        _acfs_r1_array_csv \
+        acfs_r1_runtime_prepare_selection \
+        acfs_r1_runtime_validate_plan \
+        acfs_core_policy_enforce \
+        acfs_core_policy_reason \
+        acfs_core_policy_contract \
+        _acfs_core_policy_target_home \
+        acfs_core_policy_expected_binary_path \
+        acfs_core_policy_expected_bv_versioned_path \
+        acfs_core_policy_expected_binary_sha256 \
+        _acfs_core_policy_sha256_file \
+        _acfs_core_policy_version_output \
+        acfs_core_policy_admit_binary \
+        acfs_core_policy_admit_repair_source \
+        acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        return 1
+    fi
+    # shellcheck source=contract.sh
+    builtin source "$contract_path" || return 1
+    builtin declare -F acfs_license_policy_admit_entry >/dev/null 2>&1 \
+        && builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1
+}
+
+_acfs_install_helpers_admit() {
+    local entry="${1:-helper}"
+    local module_id="${2:-}"
+
+    _acfs_install_helpers_rebind_canonical_contract || return 1
+    acfs_r1_runtime_admit_entry "$entry" "$module_id"
+}
+
+# This library is itself a direct helper entry.  Hold before loading progress,
+# manifest/index, selection, installed-predicate, runner, or fallback helpers.
+_acfs_install_helpers_admit helper || return 1 2>/dev/null || exit 1
+
 # Ensure logging functions are available (best effort)
 if [[ -z "${ACFS_BLUE:-}" ]]; then
     # shellcheck source=logging.sh
@@ -152,6 +208,9 @@ acfs_normalize_only_phases() {
 }
 
 source_manifest_index() {
+    if ! _acfs_install_helpers_admit list; then
+        return 1
+    fi
     if [[ "${ACFS_MANIFEST_INDEX_LOADED:-false}" == "true" ]]; then
         return 0
     fi
@@ -167,6 +226,10 @@ source_manifest_index() {
 
 acfs_apply_profile() {
     local profile_id="$1"
+    if ! _acfs_install_helpers_admit configuration; then
+        log_error "${ACFS_R1_POLICY_REASON:-LIC1+LIC2 profile selection is held}"
+        return 1
+    fi
     if [[ -z "$profile_id" ]]; then
         log_error "--profile requires a profile name"
         return 1
@@ -241,8 +304,18 @@ acfs_apply_profile() {
 }
 
 acfs_resolve_selection() {
+    if ! _acfs_install_helpers_admit filtered; then
+        log_error "${ACFS_R1_POLICY_REASON:-LIC1+LIC2 selection is held}"
+        return 1
+    fi
     if [[ "${ACFS_MANIFEST_INDEX_LOADED:-false}" != "true" ]]; then
         log_error "Manifest index not loaded. Cannot resolve selection."
+        return 1
+    fi
+
+    if ! declare -F acfs_r1_runtime_prepare_selection >/dev/null 2>&1 \
+        || ! acfs_r1_runtime_prepare_selection; then
+        log_error "${ACFS_R1_POLICY_REASON:-R1 runtime selection policy is unavailable}"
         return 1
     fi
 
@@ -489,12 +562,19 @@ acfs_resolve_selection() {
         fi
     done
 
+    if ! declare -F acfs_r1_runtime_validate_plan >/dev/null 2>&1 \
+        || ! acfs_r1_runtime_validate_plan; then
+        log_error "${ACFS_R1_POLICY_REASON:-R1 resolved-plan admission failed}"
+        return 1
+    fi
+
     ACFS_GENERATED_SELECTION_READY=true
     export ACFS_GENERATED_SELECTION_READY
 }
 
 should_run_module() {
     local module_id="$1"
+    _acfs_install_helpers_admit direct "$module_id" || return 1
     [[ -n "${ACFS_EFFECTIVE_RUN[$module_id]:-}" ]]
 }
 
@@ -574,6 +654,14 @@ acfs_use_generated_for_category() {
         return 1
     fi
 
+    # Every R1/default or filtered run is module-aware.  A coarse legacy
+    # category body can install modules outside the exact eleven-row plan, so
+    # selection takes precedence over every global or per-category kill switch.
+    # Invalid zero overrides are rejected while preparing the selection.
+    if acfs_selection_filters_active; then
+        return 0
+    fi
+
     # 1) Per-category override
     local category_upper
     category_upper="$(_acfs_upper "$category")"
@@ -601,15 +689,6 @@ acfs_use_generated_for_category() {
         return 0
     fi
 
-    # 3b) Selection-filtered runs must use generated dispatch for every category.
-    # The top-level installer still enters every phase; legacy phase bodies are
-    # coarse category installers and do not know ACFS_EFFECTIVE_PLAN. Generated
-    # category dispatch is module-aware and no-ops when a category/phase has no
-    # selected modules, so it is the only safe path for --only/--only-phase/--skip.
-    if acfs_selection_filters_active; then
-        return 0
-    fi
-
     return 1
 }
 
@@ -628,6 +707,7 @@ acfs_selection_filters_active() {
 acfs_use_generated_for_module() {
     local module_id="${1:-}"
     [[ -n "$module_id" ]] || return 1
+    _acfs_install_helpers_admit direct "$module_id" || return 1
 
     [[ "${ACFS_MANIFEST_INDEX_LOADED:-false}" == "true" ]] || return 1
     local category_map_decl=""
@@ -643,6 +723,7 @@ acfs_use_generated_for_module() {
 acfs_get_module_installer() {
     local module_id="${1:-}"
     [[ -n "$module_id" ]] || { echo ""; return 0; }
+    _acfs_install_helpers_admit direct "$module_id" || return 1
 
     if acfs_use_generated_for_module "$module_id"; then
         echo "${ACFS_MODULE_FUNC[$module_id]:-}"
@@ -1577,6 +1658,13 @@ acfs_module_is_installed() {
     local module_id="$1"
     local env_bin=""
     local bash_bin=""
+    local core_contract=""
+    local core_binary_path=""
+
+    # Admission precedes force flags, manifest metadata, installed-check text,
+    # filesystem probes, and binary execution. Rebinding the exact sibling
+    # contract prevents a pre-existing shell function from shadowing the HOLD.
+    _acfs_install_helpers_admit probe "$module_id" || return 1
 
     # If force reinstall is enabled, always return "not installed"
     if _acfs_force_reinstall_enabled; then
@@ -1587,6 +1675,24 @@ acfs_module_is_installed() {
     if [[ "${ACFS_MANIFEST_INDEX_LOADED:-false}" != "true" ]]; then
         return 1
     fi
+
+    # Core skip/success is an immutable-binary decision, never a version-text
+    # predicate.  Hash first, require the canonical br regular file or exact bv
+    # versioned-member symlink, and only then execute --version.
+    case "$module_id" in
+        stack.beads_rust|stack.beads_viewer)
+            if ! declare -F acfs_core_policy_contract >/dev/null 2>&1 \
+                || ! declare -F acfs_core_policy_expected_binary_path >/dev/null 2>&1 \
+                || ! declare -F acfs_core_policy_admit_binary >/dev/null 2>&1; then
+                return 1
+            fi
+            core_contract="$(acfs_core_policy_contract "$module_id" 2>/dev/null || true)"
+            core_binary_path="$(acfs_core_policy_expected_binary_path "$module_id" 2>/dev/null || true)"
+            [[ -n "$core_contract" && -n "$core_binary_path" ]] || return 1
+            acfs_core_policy_admit_binary "$module_id" install "$core_contract" "$core_binary_path"
+            return $?
+            ;;
+    esac
 
     # Get the installed_check command for this module
     local check_cmd="${ACFS_MODULE_INSTALLED_CHECK[$module_id]:-}"
@@ -1638,6 +1744,8 @@ acfs_module_is_installed() {
 # Returns 0 (true) if should skip, 1 (false) if should install
 acfs_should_skip_module() {
     local module_id="$1"
+
+    _acfs_install_helpers_admit helper "$module_id" || return 1
 
     # If force reinstall, don't skip
     if _acfs_force_reinstall_enabled; then
@@ -1708,8 +1816,14 @@ acfs_use_generated_category() {
 }
 
 acfs_run_generated_category_phase() {
-    local category="$1"
-    local phase="$2"
+    local category="${1:-}"
+    local phase="${2:-}"
+
+    if ! _acfs_install_helpers_admit helper; then
+        log_error "${ACFS_R1_POLICY_REASON:-LIC1+LIC2 generated helper dispatch is held}"
+        ACFS_MODULE_FAILURES+=("${category:-unknown} (LIC1+LIC2 helper rejection)")
+        return 1
+    fi
 
     if [[ "${ACFS_MANIFEST_INDEX_LOADED:-false}" != "true" ]]; then
         log_error "Manifest index not loaded; cannot run generated category: $category"
@@ -1750,6 +1864,12 @@ acfs_run_generated_category_phase() {
 
     for module in "${ACFS_EFFECTIVE_PLAN[@]}"; do
         key="$module"
+        if ! acfs_r1_runtime_admit_entry direct "$module"; then
+            log_error "${ACFS_R1_POLICY_REASON:-R1 direct-module admission failed for $module}"
+            ACFS_MODULE_FAILURES+=("$module (R1 lifecycle rejection)")
+            had_failure=true
+            continue
+        fi
         if [[ "${ACFS_MODULE_CATEGORY[$key]:-}" != "$category" ]]; then
             continue
         fi

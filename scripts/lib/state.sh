@@ -16,13 +16,45 @@
 #   - agentic_coding_flywheel_setup-aa1: Implement atomic state file writes
 # ============================================================
 
-# Prevent multiple sourcing
-if [[ -n "${_ACFS_STATE_SH_LOADED:-}" ]]; then
-    return 0
-fi
+# Do not trust an inherited loaded-marker: state/resume policy must always be
+# rebound from this exact sibling library before any direct call can proceed.
 _ACFS_STATE_SH_LOADED=1
 
 _ACFS_STATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+_state_license_admit() {
+    local entry="${1:-configuration}"
+    local module_id="${2:-}"
+    local contract_path="$_ACFS_STATE_SCRIPT_DIR/contract.sh"
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    [[ ! -L "$_ACFS_STATE_SCRIPT_DIR" && -f "$contract_path" && ! -L "$contract_path" ]] || return 1
+    if ! builtin unset -f acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry 2>/dev/null; then
+        return 1
+    fi
+    # shellcheck source=contract.sh
+    builtin source "$contract_path" || return 1
+    acfs_r1_runtime_admit_entry "$entry" "$module_id"
+}
+
+# Resume/state helpers are unavailable while the moduleless configuration
+# boundary is held.  Refuse before reading or defining any state mutation.
+_state_license_admit configuration || return 1 2>/dev/null || exit 1
+
 if ! type -t local_progress_record_installer_phase >/dev/null 2>&1 && [[ -f "$_ACFS_STATE_SCRIPT_DIR/progress.sh" ]]; then
     # shellcheck source=progress.sh
     source "$_ACFS_STATE_SCRIPT_DIR/progress.sh" 2>/dev/null || true
@@ -391,6 +423,7 @@ state_get_file() {
 # Usage: state_init
 # Returns: 0 on success, 1 on failure
 state_init() {
+    _state_license_admit install || return 1
     local state_file
     state_file="$(state_get_file 2>/dev/null || true)"
     if [[ -z "$state_file" ]]; then
@@ -570,6 +603,7 @@ EOF
 #
 # Related: agentic_coding_flywheel_setup-aa1
 state_write_atomic() {
+    _state_license_admit configuration || return 1
     local file_path="$1"
     local content="$2"
     local temp_file
@@ -855,6 +889,7 @@ _state_release_lock() {
 # Usage: state_mark_interrupted
 # Returns: 0 on success, 1 if state file does not exist
 state_mark_interrupted() {
+    _state_license_admit failure-cleanup || return 1
     local state_file
     state_file="$(state_get_file)"
 
@@ -882,6 +917,7 @@ state_mark_interrupted() {
 # Outputs: JSON content to stdout
 # Returns: 0 on success, 1 if file doesn't exist or is invalid
 state_load() {
+    _state_license_admit resume || return 1
     local state_file
     state_file="$(state_get_file)"
 
@@ -1728,6 +1764,7 @@ state_upgrade_print_status() {
 # Returns: 0 on success, 1 on failure
 state_save() {
     local content="$1"
+    _state_license_admit configuration || return 1
     local state_file
     state_file="$(state_get_file)"
 
@@ -1751,6 +1788,8 @@ state_save() {
 _state_update_with_jq() {
     local jq_expr="$1"
     shift
+
+    _state_license_admit configuration || return 1
 
     if ! command -v jq &>/dev/null; then
         echo "Error: jq is required for state_update" >&2
@@ -1814,6 +1853,8 @@ state_update_with_args() {
 # Returns: 0 on success, 1 on failure
 state_set_resume_hint() {
     local resume_hint="${1-}"
+
+    _state_license_admit resume || return 1
 
     if ! command -v jq &>/dev/null; then
         return 1
@@ -2160,6 +2201,8 @@ state_selection_includes_phase() {
     local target_phase=""
     local target_phase_name=""
 
+    _state_license_admit helper || return 1
+
     if [[ "${ACFS_EFFECTIVE_PLAN+x}" == "x" ]]; then
         if [[ ${#ACFS_EFFECTIVE_PLAN[@]} -gt 0 ]]; then
             for module in "${ACFS_EFFECTIVE_PLAN[@]}"; do
@@ -2196,6 +2239,7 @@ state_selection_includes_phase() {
 }
 
 state_has_module_selection() {
+    _state_license_admit helper || return 1
     if [[ "${ONLY_MODULES+x}" == "x" ]] && [[ ${#ONLY_MODULES[@]} -gt 0 ]]; then
         return 0
     fi
@@ -2207,6 +2251,8 @@ state_has_module_selection() {
 
 state_should_skip_phase() {
     local phase_id="$1"
+
+    _state_license_admit resume || return 1
 
     # Skip if already completed
     if state_is_phase_completed "$phase_id"; then
@@ -2546,6 +2592,7 @@ state_handle_invalid() {
 # Backup and quarantine corrupted state file (move aside)
 # Usage: state_backup_and_remove
 state_backup_and_remove() {
+    _state_license_admit configuration || return 1
     local state_file
     state_file="$(state_get_file 2>/dev/null || true)"
     if [[ -z "$state_file" ]]; then

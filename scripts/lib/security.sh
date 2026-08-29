@@ -17,6 +17,66 @@ esac
 SECURITY_SCRIPT_DIR="$(cd "$_acfs_security_source_dir" && pwd -P)"
 unset _acfs_security_source _acfs_security_source_dir
 
+# Installer/checksum operations can be reached by sourcing this library and
+# calling a helper directly. Rebind the exact sibling contract on every such
+# call so an inherited function or loaded marker cannot turn the commissioning
+# HOLD into authority to list, inspect, fetch, verify, stage, or execute module
+# material.
+if ! builtin unset -f _acfs_security_rebind_canonical_contract \
+    _acfs_security_admit_module_operation 2>/dev/null; then
+    printf '%s\n' 'ERROR: imported ACFS security policy helper is not replaceable' >&2
+    return 1 2>/dev/null || exit 1
+fi
+_acfs_security_rebind_canonical_contract() {
+    local contract_path="$SECURITY_SCRIPT_DIR/contract.sh"
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    [[ ! -L "$SECURITY_SCRIPT_DIR" && -f "$contract_path" && ! -L "$contract_path" ]] || return 1
+    if ! builtin unset -f acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry \
+        _acfs_r1_array_csv \
+        acfs_r1_runtime_prepare_selection \
+        acfs_r1_runtime_validate_plan \
+        acfs_core_policy_enforce \
+        acfs_core_policy_reason \
+        acfs_core_policy_contract \
+        _acfs_core_policy_target_home \
+        acfs_core_policy_expected_binary_path \
+        acfs_core_policy_expected_bv_versioned_path \
+        acfs_core_policy_expected_binary_sha256 \
+        _acfs_core_policy_sha256_file \
+        _acfs_core_policy_version_output \
+        acfs_core_policy_admit_binary \
+        acfs_core_policy_admit_repair_source \
+        acfs_core_policy_enforce_installer_execution 2>/dev/null; then
+        return 1
+    fi
+    # shellcheck source=contract.sh
+    builtin source "$contract_path" || return 1
+    builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1
+}
+
+_acfs_security_admit_module_operation() {
+    local entry="${1:-helper}"
+    local module_id="${2:-}"
+
+    _acfs_security_rebind_canonical_contract || return 1
+    acfs_r1_runtime_admit_entry "$entry" "$module_id"
+}
+
 # Ensure we have logging functions available
 if [[ -z "${ACFS_BLUE:-}" ]]; then
     # shellcheck source=logging.sh
@@ -289,6 +349,8 @@ acfs_is_github_download_url() {
 # For GitHub URLs, uses github_fetch_with_backoff for rate limit handling.
 # Related: bd-1lug
 acfs_download_to_file() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local url="$1"
     local output_path="$2"
     local name="${3:-$url}"
@@ -788,6 +850,8 @@ acfs_security_bound_snapshot_is_current() {
 }
 
 acfs_installer_cache_snapshot_regular_file() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local source_file="$1"
     local max_bytes="$2"
     local temp_template="$3"
@@ -831,6 +895,8 @@ acfs_installer_cache_snapshot_regular_file() {
 }
 
 acfs_installer_cache_verify_bound_file() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local pack_root="$1"
     local rel_path="$2"
     local expected_sha256="$3"
@@ -928,6 +994,8 @@ acfs_offline_pack_current_ubuntu_version() {
 }
 
 acfs_offline_pack_current_manifest_file() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local manifest_file="${ACFS_MANIFEST_YAML:-}"
     local default_manifest="$SECURITY_SCRIPT_DIR/../../acfs.manifest.yaml"
 
@@ -944,6 +1012,8 @@ acfs_offline_pack_current_manifest_file() {
 }
 
 acfs_offline_pack_locate() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local configured="${ACFS_VERIFIED_INSTALLER_CACHE:-}"
     local name="$1"
     local pack_root=""
@@ -1041,6 +1111,8 @@ acfs_offline_pack_artifact_is_contained() {
 }
 
 acfs_offline_pack_validate_manifest() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local pack_root="$1"
     local manifest_file="$2"
     local name="$3"
@@ -1327,6 +1399,8 @@ acfs_offline_pack_validate_manifest() {
 }
 
 acfs_offline_pack_verify_artifact() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local url="$1"
     local expected_sha256="$2"
     local name="$3"
@@ -1356,6 +1430,8 @@ acfs_offline_pack_verify_artifact() {
 }
 
 _acfs_offline_pack_verify_artifact_snapshot() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local pack_root="$1"
     local manifest_file="$2"
     local url="$3"
@@ -1495,6 +1571,8 @@ _acfs_offline_pack_verify_artifact_snapshot() {
 
 # Fetch content and calculate checksum (using temp file)
 fetch_checksum() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local url="$1"
 
     if ! enforce_https "$url"; then
@@ -1536,6 +1614,8 @@ fetch_checksum() {
 #   $2 - Expected SHA256
 #   $3 - Name (for logging)
 verify_checksum() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local url="$1"
     local expected_sha256="$2"
     local name="${3:-installer}"
@@ -1659,6 +1739,8 @@ verify_checksum() {
 #   $3 - Expected SHA256
 #   $4 - Name (for logging)
 acfs_stage_verified_installer() {
+    _acfs_security_admit_module_operation install || return $?
+
     local staging_output_name="${1:-}"
     local url="${2:-}"
     local expected_sha256="${3:-}"
@@ -1727,6 +1809,8 @@ acfs_stage_verified_installer() {
 #   $4 - Name (for logging)
 #   $@ - Additional args to pass to the installer
 fetch_and_run_with_runner() {
+    _acfs_security_admit_module_operation install || return $?
+
     if [[ $# -lt 4 ]]; then
         log_error "fetch_and_run_with_runner requires runner, URL, checksum, and name"
         return 1
@@ -1780,6 +1864,8 @@ fetch_and_run_with_runner() {
 
 # Fetch and run with Bash after complete verification and staging.
 fetch_and_run() {
+    _acfs_security_admit_module_operation install || return $?
+
     local url="$1"
     local expected_sha256="${2:-}"
     local name="${3:-installer}"
@@ -1816,6 +1902,8 @@ fetch_and_run() {
 #   1 - Failure (abort or error)
 #
 fetch_and_run_with_recovery() {
+    _acfs_security_admit_module_operation install || return $?
+
     local url="$1"
     local expected_sha256="${2:-}"
     local name="${3:-installer}"
@@ -1900,6 +1988,8 @@ fetch_and_run_with_recovery() {
 
 # Print all upstream URLs that will be fetched
 print_upstream_urls() {
+    _acfs_security_admit_module_operation list || return $?
+
     echo ""
     printf "${CYAN}Upstream Installers${NC}\n"
     echo "============================================================"
@@ -1919,6 +2009,8 @@ print_upstream_urls() {
 
 # Print URLs with current checksums (for updating checksums.yaml)
 print_current_checksums() {
+    _acfs_security_admit_module_operation configuration || return $?
+
     local had_failure=false
     local tmp_output=""
 
@@ -2016,6 +2108,8 @@ acfs_strict_checksums_error() {
 #   $2 - name of associative-array output for URLs
 #   $3 - name of associative-array output for SHA256 values
 acfs_load_checksums_strict() {
+    _acfs_security_admit_module_operation helper || return $?
+
     local file="$1"
     local urls_var="$2"
     local checksums_var="$3"
@@ -2197,6 +2291,8 @@ acfs_load_checksums_strict() {
 # Load checksums from YAML file (simple parser)
 # shellcheck disable=SC2120  # $1 is optional with default
 load_checksums() {
+    _acfs_security_admit_module_operation helper || return $?
+
     local file="${1:-$CHECKSUMS_FILE}"
     local current_tool=""
     local in_installers=false
@@ -2321,6 +2417,8 @@ load_checksums() {
 
 # Get checksum for a tool
 get_checksum() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local tool="$1"
     echo "${LOADED_CHECKSUMS[$tool]:-}"
 }
@@ -2330,6 +2428,8 @@ declare -gA LOADED_CHECKSUMS=()
 declare -g ACFS_CHECKSUMS_REMOTE_REFRESHED=false
 
 acfs_checksums_file_looks_valid() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local file="$1"
     local line=""
     local current_tool=""
@@ -2423,6 +2523,8 @@ acfs_checksums_file_looks_valid() {
 }
 
 acfs_fetch_fresh_checksums_to_file() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local dest="$1"
     local cache_buster=""
     local api_url="https://api.github.com/repos/${ACFS_REPO_OWNER}/${ACFS_REPO_NAME}/contents/checksums.yaml?ref=${ACFS_CHECKSUMS_REF}"
@@ -2460,6 +2562,8 @@ acfs_fetch_fresh_checksums_to_file() {
 }
 
 acfs_refresh_loaded_checksums_from_remote() {
+    _acfs_security_admit_module_operation update || return $?
+
     if [[ "$ACFS_CHECKSUMS_REMOTE_REFRESHED" == "true" ]]; then
         return 0
     fi
@@ -2543,6 +2647,8 @@ has_checksum_mismatches() {
 #   1 - User chose to abort (or critical tool mismatch in non-interactive)
 #
 handle_all_checksum_mismatches() {
+    _acfs_security_admit_module_operation helper || return $?
+
     if ! has_checksum_mismatches; then
         return 0  # No mismatches, all good
     fi
@@ -2674,6 +2780,8 @@ handle_all_checksum_mismatches() {
 #   - RECOMMENDED tool mismatch → auto-skip with warning
 #
 _handle_mismatches_noninteractive() {
+    _acfs_security_admit_module_operation helper || return $?
+
     local has_critical=false
     local critical_names=()
 
@@ -2743,6 +2851,8 @@ _handle_mismatches_noninteractive() {
 #   1 - Abort installation
 #
 handle_checksum_mismatch() {
+    _acfs_security_admit_module_operation helper || return $?
+
     local tool="$1"
     local expected="$2"
     local actual="$3"
@@ -2863,6 +2973,8 @@ handle_checksum_mismatch() {
 #   2 - Fetch error
 #
 check_installer_checksum() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local tool="$1"
     local url="${2:-${KNOWN_INSTALLERS[$tool]:-}}"
     local expected="${3:-${LOADED_CHECKSUMS[$tool]:-}}"
@@ -2897,6 +3009,8 @@ check_installer_checksum() {
 
 # Verify all known installers and report
 verify_all_installers() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local all_pass=true
     local verified=0
     local failed=0
@@ -2966,6 +3080,8 @@ verify_all_installers() {
 #   $2 - name of associative array containing installer URLs
 #   $3 - name of associative array containing expected SHA256 values
 verify_all_installers_json() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local checksums_digest="$1"
     local urls_var="$2"
     local checksums_var="$3"
@@ -3080,6 +3196,8 @@ verify_all_installers_json() {
 # Validate report structure and bind every partition entry back to the exact
 # strict checksums policy.  Associative outputs are committed transactionally.
 acfs_validate_installer_checksum_report() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local report_file="$1"
     local urls_var="$2"
     local checksums_var="$3"
@@ -3253,6 +3371,8 @@ acfs_validate_installer_checksum_report() {
 # own evidence, then emit JSON only after the source policy passes a final
 # identity/hash fence.
 acfs_verify_all_installers_json_from_file() {
+    _acfs_security_admit_module_operation probe || return $?
+
     local checksums_file="$1"
     local checksums_snapshot=""
     local checksums_fd=""
@@ -3315,6 +3435,8 @@ acfs_verify_all_installers_json_from_file() {
 # the mismatch set observed in a bound verification report.  On success stdout
 # is the exact private snapshot of CANDIDATE, suitable for an atomic install.
 acfs_validate_checksum_candidate() {
+    _acfs_security_admit_module_operation configuration || return $?
+
     local current_file="$1"
     local candidate_file="$2"
     local report_file="$3"
@@ -3475,6 +3597,14 @@ EOF
 
 main() {
     local json_output=false
+    local admission_entry="helper"
+
+    case "${1:-}" in
+        --print) admission_entry="list" ;;
+        --update-checksums|--validate-checksum-candidate) admission_entry="configuration" ;;
+        --verify|--checksum) admission_entry="probe" ;;
+    esac
+    _acfs_security_admit_module_operation "$admission_entry" || return $?
 
     # Parse --json flag if present
     for arg in "$@"; do

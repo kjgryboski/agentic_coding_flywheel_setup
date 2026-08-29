@@ -6,7 +6,7 @@
 # ============================================================
 # Data-only manifest index. Safe to source.
 
-ACFS_MANIFEST_SHA256="e175558d1fa25cf40ce148ebf9721042beaed7ec320f102029c9c480fba1a2b7"
+ACFS_MANIFEST_SHA256="27f91a0f723a723145431ae5b303a8b127890dde26ab8b0de8b11b8a5de2ba06"
 
 ACFS_MODULES_IN_ORDER=(
   "base.system"
@@ -753,8 +753,8 @@ declare -gA ACFS_MODULE_INSTALLED_CHECK=(
   ['stack.jeffreysprompts']="command -v jfp"
   ['stack.process_triage']="command -v pt"
   ['stack.ultimate_bug_scanner']="command -v ubs"
-  ['stack.beads_rust']="br --version 2>/dev/null | grep -Eq \"(^|[[:space:]])v?0[.]5[.]3([[:space:]]|\$)\""
-  ['stack.beads_viewer']="bv --version 2>/dev/null | grep -Eq \"(^|[[:space:]])v?0[.]22[.]0([[:space:]]|\$)\""
+  ['stack.beads_rust']="false"
+  ['stack.beads_viewer']="false"
   ['stack.cass']="command -v cass"
   ['stack.cm']="command -v cm"
   ['stack.caam']="command -v caam"

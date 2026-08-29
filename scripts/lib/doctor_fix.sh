@@ -6,9 +6,69 @@
 # Implements bd-31ps.6.2 based on spec in doctor_fix_spec.md
 # ============================================================
 
-# Prevent multiple sourcing
-[[ -n "${_ACFS_DOCTOR_FIX_LOADED:-}" ]] && return 0
-_ACFS_DOCTOR_FIX_LOADED=1
+# Ambient loader markers are not authority to skip this exact implementation.
+_ACFS_DOCTOR_FIX_LOADED="R1-exact"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" \
+    || return 1 2>/dev/null || exit 1
+
+_doctor_fix_rebind_canonical_contract() {
+    local contract_script="$SCRIPT_DIR/contract.sh"
+    local policy_function=""
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    if [[ ! -f "$contract_script" || -L "$contract_script" ]]; then
+        printf 'ERROR: canonical ACFS doctor-fix contract unavailable: %s\n' "$contract_script" >&2
+        return 1
+    fi
+    for policy_function in \
+        acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry \
+        _acfs_r1_array_csv \
+        acfs_r1_runtime_prepare_selection \
+        acfs_r1_runtime_validate_plan \
+        acfs_core_policy_enforce \
+        acfs_core_policy_reason \
+        acfs_core_policy_contract \
+        _acfs_core_policy_target_home \
+        acfs_core_policy_expected_binary_path \
+        acfs_core_policy_expected_bv_versioned_path \
+        acfs_core_policy_expected_binary_sha256 \
+        _acfs_core_policy_sha256_file \
+        _acfs_core_policy_version_output \
+        acfs_core_policy_admit_binary \
+        acfs_core_policy_admit_repair_source \
+        acfs_core_policy_enforce_installer_execution; do
+        if builtin declare -F "$policy_function" >/dev/null 2>&1; then
+            builtin unset -f "$policy_function" 2>/dev/null || return 1
+        fi
+    done
+    # shellcheck source=contract.sh
+    builtin source "$contract_script" || return 1
+    [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" == "R1-held-module-exclusion-runtime-v1" ]] \
+        && builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+        && builtin declare -F acfs_core_policy_enforce >/dev/null 2>&1
+}
+
+# Doctor-fix is held before direct fixers, configuration readers, installer
+# helpers, logs, receipts, sessions, and finalization callbacks are defined.
+if ! _doctor_fix_rebind_canonical_contract \
+    || ! acfs_r1_runtime_admit_entry doctor-fix; then
+    printf 'ERROR: %s\n' "${ACFS_R1_POLICY_REASON:-canonical R1 doctor-fix admission unavailable}" >&2
+    return 1 2>/dev/null || exit 1
+fi
 
 doctor_fix_sanitize_abs_nonroot_path() {
     local path_value="${1:-}"
@@ -552,7 +612,7 @@ ACFS_INTEGRITY_FILE="${ACFS_INTEGRITY_FILE:-${ACFS_STATE_DIR}/.integrity}"
 export ACFS_STATE_DIR ACFS_CHANGES_FILE ACFS_UNDOS_FILE ACFS_BACKUPS_DIR ACFS_LOCK_FILE ACFS_INTEGRITY_FILE
 
 # Source autofix library for change tracking
-SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# SCRIPT_DIR was derived from this exact file before any loader marker.
 if [[ -f "$SCRIPT_DIR/autofix.sh" ]]; then
     # shellcheck source=autofix.sh
     source "$SCRIPT_DIR/autofix.sh"
@@ -569,6 +629,7 @@ DOCTOR_FIX_LOG="${DOCTOR_FIX_LOG:-}"
 DOCTOR_FIX_DRY_RUN=false
 DOCTOR_FIX_YES=false
 DOCTOR_FIX_PROMPT=false
+DOCTOR_FIX_SECURITY_READY=false
 
 # Counters for fix summary
 declare -g FIX_APPLIED=0
@@ -595,11 +656,11 @@ doctor_fix_log() {
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     log_file="$(doctor_fix_log_file_path)"
 
-    # Ensure log directory exists
-    mkdir -p "$(dirname "$log_file")"
-
-    # Log to file
-    echo "[$timestamp] [$level] $message" >> "$log_file"
+    # Preview mode is byte-for-byte state read-only, including doctor logs.
+    if [[ "${DOCTOR_FIX_DRY_RUN:-false}" != "true" ]]; then
+        mkdir -p "$(dirname "$log_file")"
+        echo "[$timestamp] [$level] $message" >> "$log_file"
+    fi
 
     # Output to user. Under --json stdout must stay a single JSON document,
     # so informational fix chatter goes to stderr there.
@@ -826,26 +887,28 @@ doctor_fix_backups_json_array() {
 }
 
 doctor_fix_require_security() {
-    if [[ "${DOCTOR_FIX_SECURITY_READY:-false}" == "true" ]]; then
-        return 0
-    fi
-
     local security_script="$SCRIPT_DIR/security.sh"
-    if [[ ! -r "$security_script" ]]; then
-        security_script="$(doctor_fix_runtime_acfs_home)/scripts/lib/security.sh"
-    fi
+    local checksums_file="$SCRIPT_DIR/../../checksums.yaml"
 
-    if [[ ! -r "$security_script" ]]; then
-        doctor_fix_log WARN "security.sh not available; cannot verify upstream installer scripts"
+    # Cache/environment markers and installed-runtime copies are not
+    # commissioning authority. Verify and load the profile-bound siblings on
+    # every mutation boundary, then restore the exact contract definitions.
+    if ! _doctor_fix_rebind_canonical_contract \
+        || ! acfs_r1_runtime_verify_profile \
+        || [[ ! -f "$security_script" || -L "$security_script" ]] \
+        || [[ ! -f "$checksums_file" || -L "$checksums_file" ]]; then
+        doctor_fix_log WARN "exact R1 security/checksum authority is unavailable"
         return 1
     fi
 
+    export CHECKSUMS_FILE="$checksums_file"
     # shellcheck source=security.sh
-    source "$security_script" || return 1
+    builtin source "$security_script" || return 1
     if ! load_checksums >/dev/null 2>&1; then
         doctor_fix_log WARN "checksums.yaml not available; refusing to run unverified installer scripts"
         return 1
     fi
+    _doctor_fix_rebind_canonical_contract || return 1
 
     DOCTOR_FIX_SECURITY_READY=true
     return 0
@@ -901,7 +964,10 @@ doctor_fix_require_core_installer_admission() {
     [[ -n "$core_module" ]] || return 0
     core_target_home="$(doctor_fix_runtime_home 2>/dev/null || true)"
 
-    if ! doctor_fix_require_security \
+    if [[ "$tool" == "br" ]] && ! doctor_fix_require_security; then
+        return 1
+    fi
+    if ! _doctor_fix_rebind_canonical_contract \
         || ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
         || ! acfs_core_policy_enforce_installer_execution \
             "$core_module" install "$core_target_home" "$@"; then
@@ -922,7 +988,8 @@ doctor_fix_core_binary_admitted() {
     [[ -n "$core_module" ]] || return 0
     core_contract="$(doctor_fix_core_contract_for_tool "$tool" 2>/dev/null || true)"
 
-    if ! declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \
+    if ! _doctor_fix_rebind_canonical_contract \
+        || ! declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \
         || ! acfs_core_policy_admit_binary \
             "$core_module" install "$core_contract" "$binary_path"; then
         doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-core binary admission is on HOLD for $tool}"
@@ -1089,10 +1156,6 @@ doctor_fix_run_verified_installer_with_env() {
         return 1
     fi
 
-    if ! doctor_fix_require_security; then
-        return 1
-    fi
-
     case "$tool" in
         mcp_agent_mail|br|bv)
             local core_module=""
@@ -1103,10 +1166,22 @@ doctor_fix_run_verified_installer_with_env() {
                 bv) core_module="stack.beads_viewer" ;;
             esac
             core_target_home="$(doctor_fix_runtime_home 2>/dev/null || true)"
+            # Reach the Agent Mail HOLD and direct-bv rejection before any
+            # registry load. br loads only profile-bound security, then the
+            # exact contract is rebound immediately before admission.
+            if [[ "$tool" == "br" ]] && ! doctor_fix_require_security; then
+                return 1
+            fi
+            _doctor_fix_rebind_canonical_contract || return 1
             if ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
                 || ! acfs_core_policy_enforce_installer_execution \
                     "$core_module" install "$core_target_home" "$@"; then
                 doctor_fix_log WARN "${ACFS_CORE_POLICY_REASON:-core installer execution policy unavailable for $tool}"
+                return 1
+            fi
+            ;;
+        *)
+            if ! doctor_fix_require_security; then
                 return 1
             fi
             ;;
@@ -1561,6 +1636,112 @@ fix_symlink_create() {
     return 0
 }
 
+# Repair only bv's public link, and only from the exact versioned binary
+# admitted by the content-addressed archive/member contract. br is a regular
+# canonical file and has no symlink repair route.
+fix_bv_canonical_symlink() {
+    local check_id="${1:-stack.beads_viewer}"
+    local runtime_home=""
+    local source_path=""
+    local public_path=""
+    local supplied_contract=""
+    local staged_link=""
+    local backup_json='[]'
+    local restore_command=""
+    local ln_bin=""
+    local mkdir_bin=""
+    local mv_bin=""
+    local rm_bin=""
+
+    _doctor_fix_rebind_canonical_contract || return 1
+    if ! acfs_r1_runtime_admit_entry doctor-fix stack.beads_viewer; then
+        doctor_fix_log ERROR "${ACFS_R1_POLICY_REASON:-R1 rejected Beads Viewer repair}"
+        return 1
+    fi
+
+    runtime_home="$(doctor_fix_runtime_home 2>/dev/null || true)"
+    [[ -n "$runtime_home" && "$runtime_home" == /* && "$runtime_home" != "/" ]] || return 1
+    source_path="$runtime_home/.local/lib/acfs/bv/v0.22.0/bv"
+    public_path="$runtime_home/.local/bin/bv"
+    supplied_contract="$(doctor_fix_core_contract_for_tool bv 2>/dev/null || true)"
+
+    if ! acfs_core_policy_admit_repair_source \
+        stack.beads_viewer install "$supplied_contract" "$source_path"; then
+        doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-exact bv repair source rejected}"
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+    if acfs_core_policy_admit_binary \
+        stack.beads_viewer doctor "$supplied_contract" "$public_path"; then
+        doctor_fix_log INFO "Beads Viewer canonical symlink is already exact"
+        return 0
+    fi
+    if [[ -e "$public_path" && ! -L "$public_path" ]]; then
+        doctor_fix_log ERROR "Refusing to overwrite non-symlink Beads Viewer public path: $public_path"
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+
+    if [[ "$DOCTOR_FIX_DRY_RUN" == "true" ]]; then
+        FIXES_DRY_RUN+=("$check_id|Repair exact bv canonical symlink|$public_path|ln -s $source_path $public_path")
+        doctor_fix_log DRY "Repair exact Beads Viewer symlink: $public_path -> $source_path"
+        return 0
+    fi
+
+    if [[ -e "$public_path" || -L "$public_path" ]]; then
+        backup_json="$(create_backup "$public_path" "doctor-fix-bv-canonical-link" 2>/dev/null || echo '[]')"
+        restore_command="$(autofix_backup_restore_command "$backup_json" 2>/dev/null || true)"
+        if [[ "$backup_json" == '[]' || -z "$restore_command" ]]; then
+            doctor_fix_log ERROR "Failed to preserve existing bv symlink before repair"
+            FIX_FAILED=$((FIX_FAILED + 1))
+            return 1
+        fi
+    else
+        restore_command="$(doctor_fix_build_remove_path_rollback \
+            "$public_path" "$(doctor_fix_nearest_existing_parent "$public_path")")" || return 1
+    fi
+
+    ln_bin="$(doctor_fix_system_binary_path ln 2>/dev/null || true)"
+    mkdir_bin="$(doctor_fix_system_binary_path mkdir 2>/dev/null || true)"
+    mv_bin="$(doctor_fix_system_binary_path mv 2>/dev/null || true)"
+    rm_bin="$(doctor_fix_system_binary_path rm 2>/dev/null || true)"
+    if [[ -z "$ln_bin" || -z "$mkdir_bin" || -z "$mv_bin" || -z "$rm_bin" ]]; then
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+    "$mkdir_bin" -p "$runtime_home/.local/bin" || return 1
+    staged_link="$runtime_home/.local/bin/.bv.acfs-r1-link.$$.$RANDOM"
+    if [[ -e "$staged_link" || -L "$staged_link" ]] \
+        || ! "$ln_bin" -s "$source_path" "$staged_link" \
+        || ! "$mv_bin" -f "$staged_link" "$public_path"; then
+        "$rm_bin" -f "$staged_link" 2>/dev/null || true
+        doctor_fix_log ERROR "Failed to install exact Beads Viewer canonical symlink"
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+
+    if ! acfs_core_policy_admit_binary \
+        stack.beads_viewer doctor "$supplied_contract" "$public_path"; then
+        doctor_fix_run_rollback_command "$restore_command" false || true
+        doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-repaired bv link failed exact binary admission}"
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+    if ! doctor_fix_record_change_or_rollback \
+        "$restore_command" false \
+        "symlink" "Repaired exact Beads Viewer canonical symlink" \
+        "$restore_command" false "info" "$(doctor_fix_files_json "$public_path")" \
+        "$(doctor_fix_backups_json_array "$backup_json")" "[]"; then
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+
+    doctor_fix_log INFO "Repaired exact Beads Viewer canonical symlink"
+    FIXES_APPLIED+=("$check_id|Repaired exact Beads Viewer canonical symlink")
+    FIX_APPLIED=$((FIX_APPLIED + 1))
+    return 0
+}
+
 # ============================================================
 # Fixer: Plugin Clone (fix.plugin.clone)
 # ============================================================
@@ -1738,12 +1919,38 @@ dispatch_fix() {
     local check_id="$1"
     local check_status="$2"
     local fix_hint="${3:-}"  # Optional hint from check (e.g., file path)
+    local r1_module=""
+
+    if ! _doctor_fix_rebind_canonical_contract \
+        || ! acfs_r1_runtime_admit_entry doctor-fix; then
+        doctor_fix_log ERROR "${ACFS_R1_POLICY_REASON:-canonical R1 doctor-fix admission unavailable}"
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
 
     # Only fix failed or warned checks
     case "$check_status" in
         pass) return 0 ;;
         skip) return 0 ;;
     esac
+
+    case "$check_id" in
+        stack.mcp_agent_mail*|symlink.am) r1_module="stack.mcp_agent_mail" ;;
+        stack.beads_viewer|stack.bv|symlink.bv) r1_module="stack.beads_viewer" ;;
+        stack.beads_rust|stack.beads_rust.*|symlink.br) r1_module="stack.beads_rust" ;;
+        *)
+            doctor_fix_log ERROR "R1 blocks doctor repair outside the exact admitted core routes: $check_id"
+            FIXES_MANUAL+=("$check_id|R1 has no content-addressed repair route for this check|No mutation was performed")
+            FIX_MANUAL=$((FIX_MANUAL + 1))
+            FIX_FAILED=$((FIX_FAILED + 1))
+            return 1
+            ;;
+    esac
+    if ! acfs_r1_runtime_admit_entry doctor-fix "$r1_module"; then
+        doctor_fix_log ERROR "${ACFS_R1_POLICY_REASON:-R1 rejected repair for $r1_module}"
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
 
     # A WARN is advisory ("optional tool not installed", "service not
     # running", "ssh keepalive not set"). Several of the fixers behind those
@@ -1797,17 +2004,7 @@ dispatch_fix() {
             fix_verified_install "$check_id" "ubs" "ubs" --easy-mode
             ;;
         stack.beads_viewer|stack.bv)
-            if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
-                || ! acfs_core_policy_enforce "stack.beads_viewer" doctor \
-                    "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv"; then
-                doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-Beads Viewer core admission policy unavailable}"
-            else
-                doctor_fix_log ERROR "Beads Viewer repair requires the content-addressed generated route: install.sh --only stack.beads_viewer"
-            fi
-            FIXES_MANUAL+=("$check_id|Use the content-addressed generated Beads Viewer installer|install.sh --only stack.beads_viewer")
-            FIX_MANUAL=$((FIX_MANUAL + 1))
-            FIX_FAILED=$((FIX_FAILED + 1))
-            return 1
+            fix_bv_canonical_symlink "$check_id"
             ;;
         stack.beads_rust|stack.beads_rust.*)
             if ! doctor_fix_require_security \
@@ -1857,19 +2054,12 @@ dispatch_fix() {
             ;;
 
         # Symlinks
-        symlink.br|symlink.bv)
-            local core_tool="${check_id#symlink.}"
-            local core_module=""
-            local core_contract=""
-            core_module="$(doctor_fix_core_module_for_tool "$core_tool" 2>/dev/null || true)"
-            core_contract="$(doctor_fix_core_contract_for_tool "$core_tool" 2>/dev/null || true)"
-            if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
-                || ! acfs_core_policy_enforce "$core_module" doctor "$core_contract"; then
-                doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-core symlink admission is unavailable for $core_tool}"
-            else
-                doctor_fix_log ERROR "$core_tool symlink repair is on HOLD; arbitrary Cargo binaries are not canonical repair sources"
-            fi
-            FIXES_MANUAL+=("$check_id|Use the canonical content-addressed installer; no Cargo binary was linked|install.sh --only $core_module")
+        symlink.bv)
+            fix_bv_canonical_symlink "$check_id"
+            ;;
+        symlink.br)
+            doctor_fix_log ERROR "br is a canonical regular file; no symlink source is admitted"
+            FIXES_MANUAL+=("$check_id|Use the exact pinned br installer; no Cargo binary was linked|install.sh --only stack.beads_rust")
             FIX_MANUAL=$((FIX_MANUAL + 1))
             FIX_FAILED=$((FIX_FAILED + 1))
             return 1
@@ -2483,8 +2673,9 @@ fix_ssh_keepalive() {
 # ============================================================
 
 doctor_fix_require_agent_mail_admission() {
-    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
-        || ! acfs_core_policy_enforce "stack.mcp_agent_mail" doctor ""; then
+    if ! _doctor_fix_rebind_canonical_contract \
+        || ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce "stack.mcp_agent_mail" install ""; then
         doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-MCP Agent Mail core admission policy unavailable}"
         return 1
     fi
@@ -2497,6 +2688,7 @@ doctor_fix_agent_mail_cli_path() {
     local primary_bin=""
     local candidate=""
 
+    doctor_fix_require_agent_mail_admission || return 1
     runtime_home="$(doctor_fix_runtime_home)"
     [[ -n "$runtime_home" ]] || return 1
 
@@ -2547,6 +2739,7 @@ doctor_fix_agent_mail_bin() {
     local candidate=""
     local resolved=""
 
+    doctor_fix_require_agent_mail_admission || return 1
     runtime_user="$(doctor_fix_runtime_user)"
     runtime_home="$(doctor_fix_runtime_home)"
     [[ -n "$runtime_home" ]] || return 1
@@ -2592,6 +2785,7 @@ doctor_fix_agent_mail_bin() {
 doctor_fix_agent_mail_mcp_path() {
     local am_bin="${1:-}"
 
+    doctor_fix_require_agent_mail_admission || return 1
     if [[ -z "$am_bin" ]]; then
         am_bin="$(doctor_fix_agent_mail_bin 2>/dev/null || true)"
     fi
@@ -2610,6 +2804,7 @@ agent_mail_fix_doctor_healthy() {
     local timeout_bin=""
     local -a cmd=()
 
+    doctor_fix_require_agent_mail_admission || return 1
     am_bin="$(doctor_fix_agent_mail_bin 2>/dev/null || true)"
     [[ -n "$am_bin" ]] || return 1
     cmd=("$am_bin" doctor check --json)
@@ -2637,6 +2832,7 @@ agent_mail_fix_doctor_healthy() {
 }
 
 agent_mail_fix_wait_for_health() {
+    doctor_fix_require_agent_mail_admission || return 1
     doctor_fix_source_stack_lib || return 1
     ACFS_STACK_TRUST_TARGET_HOME=true TARGET_USER="$(doctor_fix_runtime_user)" TARGET_HOME="$(doctor_fix_runtime_home)" _stack_wait_for_agent_mail_health
 }
@@ -2645,6 +2841,7 @@ agent_mail_fix_readiness_ready() {
     local readiness_body=""
     local readiness_url=""
 
+    doctor_fix_require_agent_mail_admission || return 1
     for readiness_url in \
         http://127.0.0.1:8765/health/readiness \
         http://127.0.0.1:8765/health
@@ -3229,6 +3426,12 @@ print_fix_summary() {
 run_doctor_fix() {
     local only_categories=""
 
+    if ! _doctor_fix_rebind_canonical_contract \
+        || ! acfs_r1_runtime_admit_entry doctor-fix; then
+        echo "ERROR: ${ACFS_R1_POLICY_REASON:-canonical R1 doctor-fix admission unavailable}" >&2
+        return 1
+    fi
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --dry-run) DOCTOR_FIX_DRY_RUN=true; shift ;;
@@ -3302,6 +3505,11 @@ run_doctor_fix() {
 
 # Finalize doctor --fix
 finalize_doctor_fix() {
+    if ! _doctor_fix_rebind_canonical_contract \
+        || ! acfs_r1_runtime_admit_entry doctor-fix-finalize; then
+        echo "ERROR: ${ACFS_R1_POLICY_REASON:-canonical R1 doctor-fix finalization unavailable}" >&2
+        return 1
+    fi
     # Print summary
     print_fix_summary
 

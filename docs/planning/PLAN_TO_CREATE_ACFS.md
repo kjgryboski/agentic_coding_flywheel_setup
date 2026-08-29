@@ -188,7 +188,10 @@ agy() { command agy --model "Gemini 3.1 Pro (High)" --dangerously-skip-permissio
 alias gmi='gemini --yolo'
 
 # Flywheel stack shortcuts
-alias am='cd ~/mcp_agent_mail && scripts/run_server_with_token.sh'
+# MCP Agent Mail is deliberately not aliased or started while C5 is held.
+# A future independently accepted C5 capsule must pin the exact source,
+# installer/archive, selected member, binary, service/config, and health
+# identities before this plan may name an executable command.
 alias update='sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y'
 alias uca='claude update && bun install -g @openai/codex@latest && bun install -g @google/gemini-cli@latest'
 ```
@@ -255,6 +258,14 @@ modules:
 
 ### Installation Pattern
 
+MCP Agent Mail is on a hard C5 commissioning **HOLD**. The existing C5 design
+artifact is non-authorizing: it is not an installer capsule and must not be
+treated as runtime authority. ACFS must not download, install, start, repair,
+probe, or accept Agent Mail until a future independently accepted C5 capsule
+pins its exact source, installer/archive, selected member, binary, service and
+configuration, and health-check identities. No mutable branch or ambient shell
+function may substitute for that capsule.
+
 Each tool has:
 1. Official one-liner installer
 2. Easy-mode flag where applicable
@@ -266,11 +277,9 @@ Example:
 - id: stack.mcp_agent_mail
   description: Like gmail for coding agents
   install:
-    - |
-      curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh?$(date +%s)" | bash -s -- --yes
+    - false  # C5 HOLD: future independently accepted exact capsule required
   verify:
-    - command -v am
-    - curl -fsS http://127.0.0.1:8765/health || true
+    - false  # Do not inspect binaries, services, config, or health while held
 ```
 
 ---

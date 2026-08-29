@@ -324,9 +324,11 @@ run_test_3() {
     SKIP_MODULES=("stack.cass")
     NO_DEPS=true
     local resume_hint=""
-    resume_hint=$(generate_resume_hint "stack" "MCP Agent Mail")
-    assert "D5. canonical resume keeps repeated --only selectors" "$([[ "$resume_hint" == *"--only stack.ntm"* && "$resume_hint" == *"--only stack.mcp_agent_mail"* ]] && echo true || echo false)"
-    assert "D6. canonical resume keeps phase, skip, and dependency selectors" "$([[ "$resume_hint" == *"--only-phase 9"* && "$resume_hint" == *"--skip stack.cass"* && "$resume_hint" == *"--no-deps"* ]] && echo true || echo false)"
+    local resume_rc=0
+    generate_resume_hint "stack" "MCP Agent Mail" > "$TMPROOT/resume-hint.out" 2>/dev/null || resume_rc=$?
+    resume_hint="$(cat "$TMPROOT/resume-hint.out")"
+    assert "D5. LIC1+LIC2 rejects resume generation" "$([[ $resume_rc -ne 0 && -z "$resume_hint" ]] && echo true || echo false)"
+    assert "D6. rejected resume emits no held-module selector" "$([[ "$resume_hint" != *"--only"* && "$resume_hint" != *"--resume"* ]] && echo true || echo false)"
 
     local generated_categories=""
     local cli_phase_rc=0
@@ -426,22 +428,57 @@ run_test_4() {
     assert "E.mutating. real performance budget persists" "$([[ $budget_count -eq 1 ]] && echo true || echo false)"
 }
 
+# The historical install/fallback scenarios above are no longer reachable:
+# LIC1+LIC2 must reject the run before environment discovery or generated
+# module dispatch.  Keep the remaining pure reporting/read-only assertions,
+# and prove the new failure-cleanup boundary directly.
+run_test_license_hold() {
+    local workdir="$TMPROOT/license-hold"
+    local skills_calls=0
+    local summary_calls=0
+    mkdir -p "$workdir"
+
+    DRY_RUN=false
+    PRINT_MODE=false
+    LIST_MODULES=false
+    PRINT_PLAN_MODE=false
+    ACFS_INSTALL_RUN_CONFIRMED=1
+    ACFS_SKILLS_AND_SUMMARY_DONE=0
+    ACFS_STATE_FILE="$workdir/state.json"
+    ACFS_HOME="$workdir/home/.acfs"
+    ACFS_BOOTSTRAP_SUPERVISOR=false
+
+    acfs_generated_install_stack_meta_skill() { skills_calls=$((skills_calls + 1)); }
+    print_summary() { summary_calls=$((summary_calls + 1)); }
+
+    local admission_rc=0
+    acfs_enforce_early_license_exclusion || admission_rc=$?
+    assert "H1. LIC1+LIC2 rejects before environment discovery" "$([[ $admission_rc -ne 0 ]] && echo true || echo false)"
+
+    false || cleanup
+    assert "H2. held skills are never installed by failure cleanup" "$([[ $skills_calls -eq 0 ]] && echo true || echo false)"
+    assert "H3. failure cleanup emits no mutable summary" "$([[ $summary_calls -eq 0 ]] && echo true || echo false)"
+    assert "H4. failure cleanup creates no state or ACFS home" "$([[ ! -e "$ACFS_STATE_FILE" && ! -e "$ACFS_HOME" ]] && echo true || echo false)"
+}
+
 main() {
-    command -v timeout >/dev/null 2>&1 || { echo "timeout(1) is required for this test"; exit 1; }
+    TARGET_USER="$(whoami)"
+    TARGET_HOME="$HOME"
+    MODE="vibe"
+    HAS_GUM=false
+    YES_MODE=true
+    # shellcheck disable=SC1090
+    source "$SOURCEABLE"
 
-    echo "== Test 1: module failure does not stop later modules or the summary =="
-    run_test_1
+    echo "== Test 1: LIC1+LIC2 blocks historical fallback mutation =="
+    run_test_license_hold
 
     echo
-    echo "== Test 2: EXIT trap fires exactly once, and only when it should =="
-    run_test_2
-
-    echo
-    echo "== Test 3: success reporting and resume selection stay truthful =="
+    echo "== Test 2: success reporting and resume selection stay truthful =="
     run_test_3
 
     echo
-    echo "== Test 4: read-only failure side effects are suppressed =="
+    echo "== Test 3: read-only failure side effects are suppressed =="
     run_test_4
 
     echo

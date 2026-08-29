@@ -9,6 +9,39 @@
 # NOTE: Do not enable strict mode here. This file is sourced by
 # installers and must not leak set -euo pipefail.
 
+_ACFS_PROGRESS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+_progress_admit_module_metadata() {
+    local contract_path="$_ACFS_PROGRESS_SCRIPT_DIR/contract.sh"
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    [[ ! -L "$_ACFS_PROGRESS_SCRIPT_DIR" && -f "$contract_path" && ! -L "$contract_path" ]] || return 1
+    if ! builtin unset -f acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry 2>/dev/null; then
+        return 1
+    fi
+    # shellcheck source=contract.sh
+    builtin source "$contract_path" || return 1
+    acfs_r1_runtime_admit_entry helper
+}
+
+# Progress derives counts and labels from module metadata.  Treat sourcing as
+# the direct helper boundary and refuse before defining any stateful renderer.
+_progress_admit_module_metadata || return 1 2>/dev/null || exit 1
+
 # Global progress state
 ACFS_PROGRESS_TOTAL=0
 ACFS_PROGRESS_CURRENT=0
@@ -181,6 +214,8 @@ progress_count_modules() {
     local phase="$2"
     local count=0
     local module key
+
+    _progress_admit_module_metadata || return 1
 
     if [[ "${ACFS_MANIFEST_INDEX_LOADED:-false}" != "true" ]]; then
         echo "0"

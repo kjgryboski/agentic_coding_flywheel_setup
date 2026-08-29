@@ -82,6 +82,65 @@ if [[ -z "$SCRIPT_DIR" ]]; then
     return 1 2>/dev/null || exit 1
 fi
 
+_update_rebind_canonical_contract() {
+    local contract_script="$SCRIPT_DIR/contract.sh"
+    local policy_function=""
+    local ACFS_BLUE="${ACFS_BLUE:-license-policy}"
+
+    if [[ ! -f "$contract_script" || -L "$contract_script" ]]; then
+        printf 'ERROR: canonical ACFS runtime contract unavailable: %s\n' "$contract_script" >&2
+        return 1
+    fi
+    for policy_function in \
+        acfs_license_exclusion_profile_payload \
+        _acfs_license_profile_actual_sha256 \
+        acfs_license_policy_verify_profile \
+        acfs_license_policy_module_is_held \
+        acfs_license_policy_module_is_plain_mit_only \
+        acfs_license_policy_admit_entry \
+        acfs_r1_runtime_profile_payload \
+        _acfs_r1_sha256_file \
+        _acfs_r1_profile_actual_sha256 \
+        _acfs_r1_runtime_root \
+        _acfs_r1_verify_bound_file \
+        acfs_r1_runtime_verify_profile \
+        acfs_r1_runtime_module_is_held \
+        acfs_r1_runtime_module_is_planned \
+        acfs_r1_runtime_admit_entry \
+        _acfs_r1_array_csv \
+        acfs_r1_runtime_prepare_selection \
+        acfs_r1_runtime_validate_plan \
+        acfs_core_policy_enforce \
+        acfs_core_policy_reason \
+        acfs_core_policy_contract \
+        _acfs_core_policy_target_home \
+        acfs_core_policy_expected_binary_path \
+        acfs_core_policy_expected_bv_versioned_path \
+        acfs_core_policy_expected_binary_sha256 \
+        _acfs_core_policy_sha256_file \
+        _acfs_core_policy_version_output \
+        acfs_core_policy_admit_binary \
+        acfs_core_policy_admit_repair_source \
+        acfs_core_policy_enforce_installer_execution; do
+        if builtin declare -F "$policy_function" >/dev/null 2>&1; then
+            builtin unset -f "$policy_function" 2>/dev/null || return 1
+        fi
+    done
+    # shellcheck source=contract.sh
+    builtin source "$contract_script" || return 1
+    [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" == "R1-held-module-exclusion-runtime-v1" ]] \
+        && builtin declare -F acfs_r1_runtime_admit_entry >/dev/null 2>&1 \
+        && builtin declare -F acfs_core_policy_enforce >/dev/null 2>&1
+}
+
+# Updating is held at the source/executable boundary, before target-home,
+# PATH, version, checksum, installer, state, or category inspection.
+if ! _update_rebind_canonical_contract \
+    || ! acfs_r1_runtime_admit_entry update; then
+    printf 'ERROR: %s\n' "${ACFS_R1_POLICY_REASON:-canonical R1 update admission unavailable}" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
 _update_early_current_user() {
     local current_user=""
     local id_bin=""
@@ -3835,13 +3894,30 @@ refresh_checksums() {
 
 UPDATE_SECURITY_READY=false
 update_require_security() {
-    if [[ "${UPDATE_SECURITY_READY}" == "true" ]]; then
-        return 0
-    fi
+    local security_script="$SCRIPT_DIR/security.sh"
+    local checksums_file="$SCRIPT_DIR/../../checksums.yaml"
 
-    # Refresh checksums from GitHub before loading
-    # This ensures we have the latest checksums when security verification is needed
-    refresh_checksums "${QUIET:-false}" || true
+    # R1 is content-addressed. Neither a cache marker nor an installed/runtime
+    # copy can become authority. Re-verify and source only the exact sibling
+    # security library and repository checksum ledger on every call.
+    if ! _update_rebind_canonical_contract \
+        || ! acfs_r1_runtime_verify_profile \
+        || [[ ! -f "$security_script" || -L "$security_script" ]] \
+        || [[ ! -f "$checksums_file" || -L "$checksums_file" ]]; then
+        echo "Exact R1 security/checksum authority is unavailable" >&2
+        return 1
+    fi
+    export CHECKSUMS_FILE="$checksums_file"
+    # shellcheck source=security.sh
+    builtin source "$security_script" || return 1
+    declare -f load_checksums >/dev/null 2>&1 || return 1
+    load_checksums || return 1
+    update_sync_known_installer_urls_from_checksums "$checksums_file"
+    _update_rebind_canonical_contract || return 1
+    UPDATE_SECURITY_READY=true
+    return 0
+
+    # Legacy installed-runtime discovery remains unreachable under R1.
 
     # Check for security.sh in expected locations
     local security_script=""
@@ -4313,11 +4389,6 @@ update_run_verified_installer_with_env() {
         return 1
     fi
 
-    if ! update_require_security; then
-        echo "Security verification unavailable (missing $SCRIPT_DIR/security.sh, repo scripts/lib/security.sh, or checksums.yaml)" >&2
-        return 1
-    fi
-
     case "$tool" in
         mcp_agent_mail|br|bv)
             local core_module=""
@@ -4328,10 +4399,24 @@ update_run_verified_installer_with_env() {
                 bv) core_module="stack.beads_viewer" ;;
             esac
             core_target_home="$(update_target_home "$(update_target_user)" 2>/dev/null || true)"
+            # Agent Mail and direct bv installers are rejected by the exact
+            # contract before loading a security registry. br loads only the
+            # profile-bound registry, then immediately rebinds the contract.
+            if [[ "$tool" == "br" ]] && ! update_require_security; then
+                echo "Exact R1 security verification unavailable" >&2
+                return 1
+            fi
+            _update_rebind_canonical_contract || return 1
             if ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
                 || ! acfs_core_policy_enforce_installer_execution \
                     "$core_module" update "$core_target_home" "$@"; then
                 echo "${ACFS_CORE_POLICY_REASON:-core installer execution policy unavailable for $tool}" >&2
+                return 1
+            fi
+            ;;
+        *)
+            if ! update_require_security; then
+                echo "Exact R1 security verification unavailable" >&2
                 return 1
             fi
             ;;
@@ -6238,12 +6323,157 @@ update_go() {
     log_to_file "Go version: $go_version (path: $go_path)"
 }
 
+_update_r1_repair_bv_canonical_link() {
+    local target_home="${1:-}"
+    local supplied_contract=""
+    local source_path=""
+    local public_path=""
+    local staged_link=""
+    local ln_bin=""
+    local mkdir_bin=""
+    local mv_bin=""
+    local readlink_bin=""
+    local rm_bin=""
+    local original_target=""
+    local had_original=false
+    local admission_reason=""
+
+    _update_rebind_canonical_contract || return 1
+    acfs_r1_runtime_admit_entry repair stack.beads_viewer || return 1
+    [[ -n "$target_home" && "$target_home" == /* && "$target_home" != "/" ]] || return 1
+    supplied_contract="$(acfs_core_policy_contract stack.beads_viewer 2>/dev/null || true)"
+    source_path="$target_home/.local/lib/acfs/bv/v0.22.0/bv"
+    public_path="$target_home/.local/bin/bv"
+
+    if ! acfs_core_policy_admit_repair_source \
+        stack.beads_viewer update "$supplied_contract" "$source_path"; then
+        return 1
+    fi
+    if [[ -e "$public_path" && ! -L "$public_path" ]]; then
+        ACFS_CORE_POLICY_REASON="stack.beads_viewer canonical public path is not a symlink; refusing overwrite"
+        return 1
+    fi
+    if [[ -L "$public_path" ]]; then
+        had_original=true
+    fi
+    if [[ "${DRY_RUN:-false}" == "true" ]]; then
+        ACFS_CORE_POLICY_REASON="stack.beads_viewer canonical link requires repair (dry-run is read-only)"
+        return 1
+    fi
+
+    ln_bin="$(update_system_binary_path ln 2>/dev/null || true)"
+    mkdir_bin="$(update_system_binary_path mkdir 2>/dev/null || true)"
+    mv_bin="$(update_system_binary_path mv 2>/dev/null || true)"
+    readlink_bin="$(update_system_binary_path readlink 2>/dev/null || true)"
+    rm_bin="$(update_system_binary_path rm 2>/dev/null || true)"
+    [[ -n "$ln_bin" && -n "$mkdir_bin" && -n "$mv_bin" && -n "$readlink_bin" && -n "$rm_bin" ]] || return 1
+    if [[ "$had_original" == "true" ]]; then
+        original_target="$("$readlink_bin" "$public_path" 2>/dev/null || true)"
+        [[ -n "$original_target" ]] || return 1
+    fi
+    "$mkdir_bin" -p "$target_home/.local/bin" || return 1
+    staged_link="$target_home/.local/bin/.bv.acfs-r1-link.$$.$RANDOM"
+    [[ ! -e "$staged_link" && ! -L "$staged_link" ]] || return 1
+    if ! "$ln_bin" -s "$source_path" "$staged_link"; then
+        return 1
+    fi
+    if ! "$mv_bin" -f "$staged_link" "$public_path"; then
+        "$rm_bin" -f "$staged_link" 2>/dev/null || true
+        return 1
+    fi
+    if acfs_core_policy_admit_binary \
+        stack.beads_viewer update "$supplied_contract" "$public_path"; then
+        return 0
+    fi
+
+    admission_reason="${ACFS_CORE_POLICY_REASON:-repaired bv symlink failed exact admission}"
+    if [[ "$had_original" == "true" ]]; then
+        staged_link="$target_home/.local/bin/.bv.acfs-r1-rollback.$$.$RANDOM"
+        if "$ln_bin" -s "$original_target" "$staged_link"; then
+            "$mv_bin" -f "$staged_link" "$public_path" 2>/dev/null || true
+        fi
+        "$rm_bin" -f "$staged_link" 2>/dev/null || true
+    else
+        "$rm_bin" -f "$public_path" 2>/dev/null || true
+    fi
+    ACFS_CORE_POLICY_REASON="$admission_reason"
+    return 1
+}
+
 update_stack() {
+    local aggregate_rc=0
+    local target_user=""
+    local target_home=""
+    local supplied_contract=""
+    local binary_path=""
+
+    if ! _update_rebind_canonical_contract \
+        || ! acfs_r1_runtime_admit_entry update; then
+        log_item "fail" "R1 update admission" "${ACFS_R1_POLICY_REASON:-canonical R1 runtime profile unavailable}"
+        return 1
+    fi
     if [[ "$UPDATE_STACK" != "true" ]]; then
         return 0
     fi
 
-    log_section "Agent Flywheel Stack"
+    log_section "Exact R1 Stack"
+
+    target_user="$(update_target_user 2>/dev/null || true)"
+    target_home="$(update_target_home "$target_user" 2>/dev/null || true)"
+    if [[ -z "$target_user" || -z "$target_home" || "$target_home" != /* || "$target_home" == "/" ]]; then
+        log_item "fail" "R1 stack" "unable to resolve exact target user/home"
+        return 1
+    fi
+    local TARGET_HOME="$target_home"
+
+    # C5 is absent: fail before installer, binary, service, or health probes.
+    if acfs_core_policy_enforce stack.mcp_agent_mail update ""; then
+        log_item "fail" "MCP Agent Mail" "unexpected admission without an accepted exact C5 capsule"
+    else
+        log_item "fail" "MCP Agent Mail" "${ACFS_CORE_POLICY_REASON:-C5 commissioning HOLD}"
+    fi
+    aggregate_rc=1
+
+    supplied_contract="$(acfs_core_policy_contract stack.beads_viewer 2>/dev/null || true)"
+    binary_path="$target_home/.local/bin/bv"
+    if acfs_core_policy_admit_binary \
+        stack.beads_viewer update "$supplied_contract" "$binary_path"; then
+        log_item "ok" "Beads Viewer" "exact v0.22.0 binary and canonical symlink admitted"
+    elif _update_r1_repair_bv_canonical_link "$target_home"; then
+        log_item "ok" "Beads Viewer" "repaired and admitted exact canonical v0.22.0 symlink"
+    else
+        log_item "fail" "Beads Viewer" "${ACFS_CORE_POLICY_REASON:-exact source/member/binary identity unavailable}"
+        aggregate_rc=1
+    fi
+
+    if ! update_require_security \
+        || ! _update_rebind_canonical_contract; then
+        log_item "fail" "Beads Rust" "content-addressed installer registry unavailable"
+        aggregate_rc=1
+    else
+        supplied_contract="$(acfs_core_policy_contract stack.beads_rust 2>/dev/null || true)"
+        binary_path="$target_home/.local/bin/br"
+        if acfs_core_policy_admit_binary \
+            stack.beads_rust update "$supplied_contract" "$binary_path"; then
+            log_item "ok" "Beads Rust" "exact v0.5.3 regular-file binary admitted"
+        elif [[ "${DRY_RUN:-false}" == "true" ]]; then
+            log_item "fail" "Beads Rust" "exact binary repair required (dry-run is read-only)"
+            aggregate_rc=1
+        elif update_run_verified_installer br \
+            --version v0.5.3 \
+            --dest "$target_home/.local/bin" \
+            --artifact-url "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz" \
+            --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb" \
+            && acfs_core_policy_admit_binary \
+                stack.beads_rust update "$supplied_contract" "$binary_path"; then
+            log_item "ok" "Beads Rust" "installed and admitted exact v0.5.3 binary"
+        else
+            log_item "fail" "Beads Rust" "${ACFS_CORE_POLICY_REASON:-exact installer/archive/binary identity rejected}"
+            aggregate_rc=1
+        fi
+    fi
+
+    return "$aggregate_rc"
 
     if ! update_require_security; then
         log_item "fail" "stack updates" "security verification unavailable (missing security.sh/checksums.yaml)"
@@ -6393,10 +6623,15 @@ update_stack() {
     if declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
         && acfs_core_policy_enforce "stack.beads_viewer" update \
             "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv"; then
+        local bv_target_home=""
         local bv_bin=""
-        bv_bin="$(update_binary_path bv 2>/dev/null || true)"
-        if [[ -n "$bv_bin" ]] && "$bv_bin" --version 2>/dev/null | grep -Eq '(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)'; then
-            log_item "ok" "Beads Viewer" "immutable v0.22.0 already admitted"
+        bv_target_home="$(update_target_home "$(update_target_user)" 2>/dev/null || true)"
+        bv_bin="$bv_target_home/.local/bin/bv"
+        if declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \
+            && acfs_core_policy_admit_binary "stack.beads_viewer" update \
+                "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv" \
+                "$bv_bin"; then
+            log_item "ok" "Beads Viewer" "exact canonical v0.22.0 binary admitted"
         else
             log_item "fail" "Beads Viewer" "run the content-addressed ACFS route: install.sh --only stack.beads_viewer"
         fi
@@ -6413,11 +6648,18 @@ update_stack() {
         local br_target_home=""
         br_target_home="$(update_target_home "$(update_target_user)" 2>/dev/null || true)"
         if [[ -n "$br_target_home" ]]; then
-            run_cmd "Beads Rust" update_run_verified_installer br \
+            if update_run_verified_installer br \
                 --version v0.5.3 \
                 --dest "$br_target_home/.local/bin" \
                 --artifact-url "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz" \
-                --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"
+                --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb" \
+                && acfs_core_policy_admit_binary "stack.beads_rust" update \
+                    "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123" \
+                    "$br_target_home/.local/bin/br"; then
+                log_item "ok" "Beads Rust" "exact canonical v0.5.3 binary admitted"
+            else
+                log_item "fail" "Beads Rust" "exact installer/archive/binary identity rejected"
+            fi
         else
             log_item "fail" "Beads Rust" "unable to resolve target home"
         fi
@@ -7140,7 +7382,29 @@ EOF
 }
 
 main() {
-    # Ensure PATH includes user tool directories
+    local arg=""
+
+    # The exact sibling contract is the first executable update decision.
+    if ! _update_rebind_canonical_contract \
+        || ! acfs_r1_runtime_admit_entry update; then
+        printf 'ERROR: %s\n' "${ACFS_R1_POLICY_REASON:-canonical R1 runtime profile unavailable}" >&2
+        return 1
+    fi
+
+    # Category, force, bootstrap, and partial-update selectors describe a
+    # different lifecycle than the content-addressed R1 plan.
+    for arg in "$@"; do
+        case "$arg" in
+            --apt-only|--agents-only|--cloud-only|--shell-only|--runtime-only|--stack-only|--stack|\
+            --no-apt|--no-agents|--no-cloud|--no-shell|--no-runtime|--no-stack|\
+            --bootstrap-self-update|--force)
+                printf 'ERROR: R1 rejects out-of-plan or filtered update selector: %s\n' "$arg" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    # Ensure PATH includes user tool directories only after admission.
     ensure_path
 
     # Save original arguments before parsing (for re-exec after self-update)
@@ -7279,6 +7543,17 @@ main() {
         esac
     done
 
+    # R1 never self-modifies its content-addressed runtime.
+    UPDATE_SELF=false
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '%s\n' \
+            "R1 update plan: base.system, users.ubuntu, base.filesystem, cli.modern, lang.bun, lang.uv, lang.rust, lang.go, stack.mcp_agent_mail, stack.beads_rust, stack.beads_viewer" \
+            "MCP Agent Mail: C5 commissioning HOLD; no accepted exact capsule identity exists" \
+            "Dry-run is byte-for-byte state read-only; no log, repair, network, or update action was started."
+        return 0
+    fi
+
     # Guard against running as root (unless ACFS is actually installed in /root)
     # This check is placed after argument parsing so --yes works correctly
     if [[ $EUID -eq 0 ]] && [[ "${HOME}" != "/root" ]]; then
@@ -7292,11 +7567,6 @@ main() {
             fi
         fi
     fi
-
-    # Self-update ACFS before touching any other components.
-    # This runs BEFORE init_logging so we get the latest update logic ASAP.
-    # Pass original args so re-exec (if update.sh changed) uses the same arguments.
-    update_acfs_self "${ACFS_UPDATE_ARGS[@]}"
 
     # Initialize logging
     init_logging
@@ -7318,28 +7588,18 @@ main() {
         export ACFS_INTERACTIVE=false
     fi
 
-    # Ensure jq is available (issue #180): on minimal Ubuntu installs jq may
-    # not be present, but later update steps (DCG cleanup, state management)
-    # depend on it. Keep dry-run truly read-only by skipping the install there.
-    update_ensure_jq_available
-
-    # Clean up legacy artifacts from previous versions
-    cleanup_legacy_git_safety_guard
-    cleanup_legacy_br_alias
-    cleanup_legacy_bv_alias
-
-    # Run updates
-    update_apt
-    update_bun
-    update_agents
-    update_cloud
-    update_rust
-    update_cargo_tools
-    update_uv
-    update_go
-    update_shell
-    update_stack
-    update_root_agents_md
+    # Run only the exact R1 lifecycle. users/filesystem/cli have no standalone
+    # mutable update route; their state is preserved while their identities
+    # remain part of the required plan closure.
+    acfs_r1_runtime_admit_entry update base.system && update_apt || ((FAIL_COUNT += 1))
+    log_item "skip" "users.ubuntu" "R1 identity retained; no standalone update action"
+    log_item "skip" "base.filesystem" "R1 identity retained; no standalone update action"
+    log_item "skip" "cli.modern" "R1 identity retained; covered by base package update"
+    acfs_r1_runtime_admit_entry update lang.bun && update_bun || ((FAIL_COUNT += 1))
+    acfs_r1_runtime_admit_entry update lang.rust && update_rust || ((FAIL_COUNT += 1))
+    acfs_r1_runtime_admit_entry update lang.uv && update_uv || ((FAIL_COUNT += 1))
+    acfs_r1_runtime_admit_entry update lang.go && update_go || ((FAIL_COUNT += 1))
+    update_stack || ((FAIL_COUNT += 1))
 
     # Summary
     print_summary

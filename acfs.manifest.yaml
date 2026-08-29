@@ -2319,7 +2319,9 @@ modules:
       - lang.rust
     installed_check:
       run_as: target_user
-      command: 'br --version 2>/dev/null | grep -Eq "(^|[[:space:]])v?0[.]5[.]3([[:space:]]|$)"'
+      # Exact path, regular-file, digest, and version admission lives in the
+      # canonical runtime contract. A version-only predicate is never enough.
+      command: "false"
     verified_installer:
       tool: br
       runner: bash
@@ -2327,8 +2329,8 @@ modules:
       args: ["--version", "v0.5.3", "--dest", "$TARGET_HOME/.local/bin", "--artifact-url", "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz", "--checksum", "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"]
     install: []
     verify:
-      - br --version | grep -Eq '(^|[[:space:]])v?0[.]5[.]3([[:space:]]|$)'
-      - br list --json 2>/dev/null || true
+      - '"$TARGET_HOME/.local/bin/br" --version | grep -Eq ''(^|[[:space:]])v?0[.]5[.]3([[:space:]]|$)'''
+      - '"$TARGET_HOME/.local/bin/br" list --json 2>/dev/null || true'
     notes:
       - "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7"
       - "source_tree=32e7fb93ca00ee16a72471e0304f119b8d893f97"
@@ -2369,7 +2371,9 @@ modules:
       - stack.beads_rust
     installed_check:
       run_as: target_user
-      command: 'bv --version 2>/dev/null | grep -Eq "(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)"'
+      # Exact canonical symlink target, digest, and version admission lives in
+      # the canonical runtime contract. A PATH hit is never enough.
+      command: "false"
     install:
       - |
           # acfs-summary: install content-addressed bv v0.22.0 for Linux ARM64
@@ -2517,7 +2521,7 @@ modules:
             exit 1
           fi
     verify:
-      - bv --version | grep -Eq '(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)'
+      - '"$TARGET_HOME/.local/bin/bv" --version | grep -Eq ''(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)'''
     notes:
       - "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8"
       - "comparison_installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/95a706caf57fc5fde846a453da5f28677d4a81b8/install.sh"
