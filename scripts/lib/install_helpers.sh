@@ -165,10 +165,10 @@ acfs_flag_bool() {
 # Effective selection (computed once after manifest_index)
 # Uses -g for global scope when sourced inside a function
 # ------------------------------------------------------------
-declare -gA ACFS_EFFECTIVE_RUN=()
-declare -gA ACFS_PLAN_REASON=()
-declare -gA ACFS_PLAN_EXCLUDE_REASON=()
-declare -ga ACFS_EFFECTIVE_PLAN=()
+declare -gA ACFS_EFFECTIVE_RUN
+declare -gA ACFS_PLAN_REASON
+declare -gA ACFS_PLAN_EXCLUDE_REASON
+declare -ga ACFS_EFFECTIVE_PLAN
 
 acfs_normalize_only_phases() {
     if [[ "${#ONLY_PHASES[@]}" -eq 0 ]]; then

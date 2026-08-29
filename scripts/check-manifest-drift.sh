@@ -210,6 +210,7 @@ INTERNAL_CHECKSUM_REQUIRED_PATHS=(
     scripts/generated/manifest_index.sh
     scripts/generated/doctor_checks.sh
     scripts/generated/install_all.sh
+    scripts/generated/install_w2_partial_safe.sh
     scripts/generated/install_base.sh
     scripts/generated/install_users.sh
     scripts/generated/install_filesystem.sh
@@ -243,6 +244,7 @@ GENERATED_OUTPUT_PATHS=(
     scripts/generated/install_stack.sh
     scripts/generated/install_tools.sh
     scripts/generated/install_users.sh
+    scripts/generated/install_w2_partial_safe.sh
     scripts/generated/internal_checksums.sh
     scripts/generated/manifest_index.sh
     apps/web/lib/generated/manifest-commands.ts

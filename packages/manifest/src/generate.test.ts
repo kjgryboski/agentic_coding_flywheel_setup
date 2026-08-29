@@ -1168,7 +1168,7 @@ describe('Generated script headers', () => {
     }
   });
 
-  test('source mode ignores an inherited force marker and preserves its orchestrator runner', () => {
+  test('source mode fails closed without authority despite an inherited force marker', () => {
     const scriptPath = resolve(GENERATED_DIR, 'install_base.sh');
     const result = spawnSync(
       'bash',
@@ -1193,8 +1193,8 @@ describe('Generated script headers', () => {
       }
     );
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe('orchestrator-runner\n');
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toBe('');
   });
 
   test('generated scripts source logging.sh', () => {
@@ -1232,7 +1232,7 @@ describe('Generated script headers', () => {
     expect(countMatch).not.toBeNull();
     expect(rawEntries.length).toBe(checksums.size);
     expect(Number(countMatch?.[1])).toBe(checksums.size);
-    expect(checksums.size).toBe(113);
+    expect(checksums.size).toBe(114);
 
     const mandatoryPaths = [
       'install.sh',
@@ -1335,6 +1335,7 @@ describe('Generated script headers', () => {
       'scripts/generated/manifest_index.sh',
       'scripts/generated/doctor_checks.sh',
       'scripts/generated/install_all.sh',
+      'scripts/generated/install_w2_partial_safe.sh',
       ...MODULE_CATEGORIES.map((category) => `scripts/generated/install_${category}.sh`),
     ];
     for (const path of mandatoryPaths) {

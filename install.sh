@@ -2941,22 +2941,36 @@ source_generated_installers() {
     fi
 
     local categories_decl=""
-    categories_decl="$(declare -p ACFS_CATEGORIES_IN_ORDER 2>/dev/null || true)"
-    if [[ "$categories_decl" != declare\ -a* ]]; then
-        log_error "Manifest index is missing canonical category metadata"
-        return 1
+    local -a generated_scripts=()
+    local script=""
+    if acfs_w2_partial_safe_requested; then
+        if ! acfs_w2_partial_safe_verify_allowlist || ! acfs_r1_runtime_validate_plan; then
+            log_error "${ACFS_R1_POLICY_REASON:-${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-W2 PARTIAL_SAFE generated-source admission failed}}"
+            return 1
+        fi
+        generated_scripts=(install_w2_partial_safe.sh)
+    else
+        categories_decl="$(declare -p ACFS_CATEGORIES_IN_ORDER 2>/dev/null || true)"
+        if [[ "$categories_decl" != declare\ -a* ]]; then
+            log_error "Manifest index is missing canonical category metadata"
+            return 1
+        fi
+        local category=""
+        for category in "${ACFS_CATEGORIES_IN_ORDER[@]}"; do
+            generated_scripts+=("install_${category}.sh")
+        done
     fi
 
-    local category=""
-    local script=""
-    for category in "${ACFS_CATEGORIES_IN_ORDER[@]}"; do
-        script="install_${category}.sh"
+    ACFS_GENERATED_SOURCED_PATHS=()
+    declare -ga ACFS_GENERATED_SOURCED_PATHS
+    for script in "${generated_scripts[@]}"; do
         if [[ ! -f "$ACFS_GENERATED_DIR/$script" || -L "$ACFS_GENERATED_DIR/$script" ]]; then
-            log_error "Generated category library missing or unsafe: $ACFS_GENERATED_DIR/$script"
+            log_error "Generated installer library missing or unsafe: $ACFS_GENERATED_DIR/$script"
             return 1
         fi
         # shellcheck source=/dev/null
         source "$ACFS_GENERATED_DIR/$script"
+        ACFS_GENERATED_SOURCED_PATHS+=("$ACFS_GENERATED_DIR/$script")
     done
 
     ACFS_GENERATED_SOURCED=true
@@ -3808,6 +3822,7 @@ acfs_load_internal_checksums_data() {
         scripts/generated/manifest_index.sh
         scripts/generated/doctor_checks.sh
         scripts/generated/install_all.sh
+        scripts/generated/install_w2_partial_safe.sh
         scripts/generated/install_base.sh
         scripts/generated/install_users.sh
         scripts/generated/install_filesystem.sh

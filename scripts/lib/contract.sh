@@ -81,19 +81,19 @@ acfs_require_contract() {
 # caller-supplied environment values cannot turn a HOLD or an out-of-plan
 # module into runtime authority.
 ACFS_R1_RUNTIME_PROFILE_ID="R1-held-module-exclusion-runtime-v1"
-ACFS_R1_RUNTIME_PROFILE_SHA256="9f5fc5df38814e01008a7ba43744e6f808b12999b8e0e85370271e9b86ec87db"
+ACFS_R1_RUNTIME_PROFILE_SHA256="9cd0681175adff091858f5fd92d90cfc4122e6e176822fb33899697cfe38c7b6"
 ACFS_R1_SOURCE_JSON_SHA256="33bca439667099cc56b98539aa825658a5f2f72f5d9dbd28d9212ab9cf3a427c"
 ACFS_R1_SOURCE_MD_SHA256="7141b4fa4c5362a44f7f0f61bdec7a7eef9b4bfbc6f8c3f408bb4ab8d18ca37b"
 ACFS_R1_U5V2_VERIFIER_SHA256="e70a27302ec46439f51797b4945ae54aae81ce9e4d49daa7bbc3e971cfc24445"
 ACFS_R1_U5_BASE_COMMIT="890bd2e235c3f29a94029b6d4b3c4308abb6f027"
 ACFS_R1_U5_BASE_TREE="8e1da65b3345a25fdac54eec3959932a70bab5fd"
 ACFS_R1_MANIFEST_SHA256="27f91a0f723a723145431ae5b303a8b127890dde26ab8b0de8b11b8a5de2ba06"
-ACFS_R1_GENERATOR_SHA256="d5da9de4185fa4e399357393686944ccdee1a1d8bcb0793053b3cc9b9945edbb"
+ACFS_R1_GENERATOR_SHA256="5497534b6de8787cac4123a065d9a379cfe655ffea657affd811cafcb6cebfef"
 ACFS_R1_MANIFEST_INDEX_SHA256="3f4935851a4b0e1d3e489d8c29c9c8e3e7d6b0ab55703d9c76ca6decf8e6bd34"
-ACFS_R1_INSTALL_SH_SHA256="17d314114fbf1d56403aa6076dd12261b2baac1da8df5c51c8fbdb5bd941e656"
+ACFS_R1_INSTALL_SH_SHA256="3a47aefccdc35e92afe39c50c22071f29b25bfa3c4bb41d9f2147f752797c764"
 ACFS_R1_SECURITY_SHA256="047fae70c75de78e903654f7a59e94f7ef510c26d4dbf0face1ade7696cd89be"
 ACFS_R1_CHECKSUMS_SHA256="36bbd2eba33e6ef70871f8c321623ba6d0b46720569c23b7ea5f1e91c9d0e83c"
-ACFS_R1_INSTALL_HELPERS_SHA256="a38c4e9ebad6ea476dfaf59d17860ada38356f7f6751cd84348875f49e99cc94"
+ACFS_R1_INSTALL_HELPERS_SHA256="707e771ceebc84c8a2bbe043059fb1ed361bb10fffc8ce3314ccba949839f07f"
 ACFS_R1_PROGRESS_SHA256="c75a9d6ff3c4be155b892344e135ed12b99ca444a1e6dca61d491f200d3719a7"
 ACFS_R1_MODULE_SELECTOR_SHA256="b524b6179e6eed45852d876043e17ff5563bbfb32b22401752ff9d11079c61b0"
 ACFS_R1_EXPORT_CONFIG_SHA256="0cfa29731605ca45377a6e10fdd8e261bc16aff7de8219af67542c35a017e787"
@@ -110,6 +110,7 @@ ACFS_R1_GENERATED_CLI_SHA256="1871b26476c88926c107c047d83cb90eb0cb2a0c3ab0bafbe6
 ACFS_R1_GENERATED_LANG_SHA256="6976f5724294934aa320da4ac50323d69d22349184f5ec60a632df5fca8605c1"
 ACFS_R1_GENERATED_STACK_SHA256="ac6c6138410d71f94ebd8231707d7994b182c01d241678341fb952c64cce6320"
 ACFS_R1_GENERATED_DOCTOR_SHA256="5e3389aac6674ad652b58e54ee9f5147ac4fe885ec34271777ee6411d597be1e"
+ACFS_W2_GENERATED_PARTIAL_SAFE_SHA256="f7eb826f52b87968ee154d8d3cef35bd7d535249ea258a6d550ef0f07714f3c5"
 ACFS_R1_SEED_CSV="users.ubuntu,base.filesystem,cli.modern,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer"
 ACFS_R1_PLAN_CSV="base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer"
 ACFS_R1_HELD_CSV="stack.caam,stack.slb,stack.srps,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.franken_markdown,stack.power_failure_resumer"
@@ -247,12 +248,12 @@ u5v2_verifier_sha256=e70a27302ec46439f51797b4945ae54aae81ce9e4d49daa7bbc3e971cfc
 u5_base_commit=890bd2e235c3f29a94029b6d4b3c4308abb6f027
 u5_base_tree=8e1da65b3345a25fdac54eec3959932a70bab5fd
 manifest_sha256=27f91a0f723a723145431ae5b303a8b127890dde26ab8b0de8b11b8a5de2ba06
-generator_sha256=d5da9de4185fa4e399357393686944ccdee1a1d8bcb0793053b3cc9b9945edbb
+generator_sha256=5497534b6de8787cac4123a065d9a379cfe655ffea657affd811cafcb6cebfef
 manifest_index_sha256=3f4935851a4b0e1d3e489d8c29c9c8e3e7d6b0ab55703d9c76ca6decf8e6bd34
-install_sh_sha256=17d314114fbf1d56403aa6076dd12261b2baac1da8df5c51c8fbdb5bd941e656
+install_sh_sha256=3a47aefccdc35e92afe39c50c22071f29b25bfa3c4bb41d9f2147f752797c764
 security_sha256=047fae70c75de78e903654f7a59e94f7ef510c26d4dbf0face1ade7696cd89be
 checksums_sha256=36bbd2eba33e6ef70871f8c321623ba6d0b46720569c23b7ea5f1e91c9d0e83c
-install_helpers_sha256=a38c4e9ebad6ea476dfaf59d17860ada38356f7f6751cd84348875f49e99cc94
+install_helpers_sha256=707e771ceebc84c8a2bbe043059fb1ed361bb10fffc8ce3314ccba949839f07f
 progress_sha256=c75a9d6ff3c4be155b892344e135ed12b99ca444a1e6dca61d491f200d3719a7
 module_selector_sha256=b524b6179e6eed45852d876043e17ff5563bbfb32b22401752ff9d11079c61b0
 export_config_sha256=0cfa29731605ca45377a6e10fdd8e261bc16aff7de8219af67542c35a017e787
@@ -269,6 +270,7 @@ generated_cli_sha256=1871b26476c88926c107c047d83cb90eb0cb2a0c3ab0bafbe632b6989e6
 generated_lang_sha256=6976f5724294934aa320da4ac50323d69d22349184f5ec60a632df5fca8605c1
 generated_stack_sha256=ac6c6138410d71f94ebd8231707d7994b182c01d241678341fb952c64cce6320
 generated_doctor_sha256=5e3389aac6674ad652b58e54ee9f5147ac4fe885ec34271777ee6411d597be1e
+w2_generated_partial_safe_sha256=f7eb826f52b87968ee154d8d3cef35bd7d535249ea258a6d550ef0f07714f3c5
 license_exclusion_profile_id=LICX-core-guide-license-exclusion-v1
 license_exclusion_profile_sha256=f7e9575697b7e6d18f5059c92430a01fb0bbd43b944c3b1073be4804badbe513
 lic1_sha256=9bfd85c340c6223482e07b96c668600e0db9a18b8a4f25e45f77f0129af63300
@@ -449,19 +451,19 @@ acfs_r1_runtime_verify_profile() {
         return 1
     fi
     if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" \
-        || "${ACFS_R1_RUNTIME_PROFILE_SHA256:-}" != "9f5fc5df38814e01008a7ba43744e6f808b12999b8e0e85370271e9b86ec87db" \
+        || "${ACFS_R1_RUNTIME_PROFILE_SHA256:-}" != "9cd0681175adff091858f5fd92d90cfc4122e6e176822fb33899697cfe38c7b6" \
         || "${ACFS_R1_SOURCE_JSON_SHA256:-}" != "33bca439667099cc56b98539aa825658a5f2f72f5d9dbd28d9212ab9cf3a427c" \
         || "${ACFS_R1_SOURCE_MD_SHA256:-}" != "7141b4fa4c5362a44f7f0f61bdec7a7eef9b4bfbc6f8c3f408bb4ab8d18ca37b" \
         || "${ACFS_R1_U5V2_VERIFIER_SHA256:-}" != "e70a27302ec46439f51797b4945ae54aae81ce9e4d49daa7bbc3e971cfc24445" \
         || "${ACFS_R1_U5_BASE_COMMIT:-}" != "890bd2e235c3f29a94029b6d4b3c4308abb6f027" \
         || "${ACFS_R1_U5_BASE_TREE:-}" != "8e1da65b3345a25fdac54eec3959932a70bab5fd" \
         || "${ACFS_R1_MANIFEST_SHA256:-}" != "27f91a0f723a723145431ae5b303a8b127890dde26ab8b0de8b11b8a5de2ba06" \
-        || "${ACFS_R1_GENERATOR_SHA256:-}" != "d5da9de4185fa4e399357393686944ccdee1a1d8bcb0793053b3cc9b9945edbb" \
+        || "${ACFS_R1_GENERATOR_SHA256:-}" != "5497534b6de8787cac4123a065d9a379cfe655ffea657affd811cafcb6cebfef" \
         || "${ACFS_R1_MANIFEST_INDEX_SHA256:-}" != "3f4935851a4b0e1d3e489d8c29c9c8e3e7d6b0ab55703d9c76ca6decf8e6bd34" \
-        || "${ACFS_R1_INSTALL_SH_SHA256:-}" != "17d314114fbf1d56403aa6076dd12261b2baac1da8df5c51c8fbdb5bd941e656" \
+        || "${ACFS_R1_INSTALL_SH_SHA256:-}" != "3a47aefccdc35e92afe39c50c22071f29b25bfa3c4bb41d9f2147f752797c764" \
         || "${ACFS_R1_SECURITY_SHA256:-}" != "047fae70c75de78e903654f7a59e94f7ef510c26d4dbf0face1ade7696cd89be" \
         || "${ACFS_R1_CHECKSUMS_SHA256:-}" != "36bbd2eba33e6ef70871f8c321623ba6d0b46720569c23b7ea5f1e91c9d0e83c" \
-        || "${ACFS_R1_INSTALL_HELPERS_SHA256:-}" != "a38c4e9ebad6ea476dfaf59d17860ada38356f7f6751cd84348875f49e99cc94" \
+        || "${ACFS_R1_INSTALL_HELPERS_SHA256:-}" != "707e771ceebc84c8a2bbe043059fb1ed361bb10fffc8ce3314ccba949839f07f" \
         || "${ACFS_R1_PROGRESS_SHA256:-}" != "c75a9d6ff3c4be155b892344e135ed12b99ca444a1e6dca61d491f200d3719a7" \
         || "${ACFS_R1_MODULE_SELECTOR_SHA256:-}" != "b524b6179e6eed45852d876043e17ff5563bbfb32b22401752ff9d11079c61b0" \
         || "${ACFS_R1_EXPORT_CONFIG_SHA256:-}" != "0cfa29731605ca45377a6e10fdd8e261bc16aff7de8219af67542c35a017e787" \
@@ -478,6 +480,7 @@ acfs_r1_runtime_verify_profile() {
         || "${ACFS_R1_GENERATED_LANG_SHA256:-}" != "6976f5724294934aa320da4ac50323d69d22349184f5ec60a632df5fca8605c1" \
         || "${ACFS_R1_GENERATED_STACK_SHA256:-}" != "ac6c6138410d71f94ebd8231707d7994b182c01d241678341fb952c64cce6320" \
         || "${ACFS_R1_GENERATED_DOCTOR_SHA256:-}" != "5e3389aac6674ad652b58e54ee9f5147ac4fe885ec34271777ee6411d597be1e" \
+        || "${ACFS_W2_GENERATED_PARTIAL_SAFE_SHA256:-}" != "f7eb826f52b87968ee154d8d3cef35bd7d535249ea258a6d550ef0f07714f3c5" \
         || "${ACFS_R1_SEED_CSV:-}" != "users.ubuntu,base.filesystem,cli.modern,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer" \
         || "${ACFS_R1_PLAN_CSV:-}" != "base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer" \
         || "${ACFS_R1_HELD_CSV:-}" != "stack.caam,stack.slb,stack.srps,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.franken_markdown,stack.power_failure_resumer" ]]; then
@@ -519,6 +522,9 @@ acfs_r1_runtime_verify_profile() {
     _acfs_r1_verify_bound_file "$runtime_root" "scripts/generated/install_lang.sh" "$ACFS_R1_GENERATED_LANG_SHA256" || return 1
     _acfs_r1_verify_bound_file "$runtime_root" "scripts/generated/install_stack.sh" "$ACFS_R1_GENERATED_STACK_SHA256" || return 1
     _acfs_r1_verify_bound_file "$runtime_root" "scripts/generated/doctor_checks.sh" "$ACFS_R1_GENERATED_DOCTOR_SHA256" || return 1
+    if acfs_w2_partial_safe_requested; then
+        _acfs_r1_verify_bound_file "$runtime_root" "scripts/generated/install_w2_partial_safe.sh" "$ACFS_W2_GENERATED_PARTIAL_SAFE_SHA256" || return 1
+    fi
     return 0
 }
 

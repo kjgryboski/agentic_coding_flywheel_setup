@@ -59,6 +59,17 @@ const WEB_OUTPUT_DIR = join(PROJECT_ROOT, 'apps/web/lib/generated');
 const CHECKSUMS_PATH = join(PROJECT_ROOT, 'checksums.yaml');
 const VERSION_PATH = join(PROJECT_ROOT, 'VERSION');
 
+const W2_PARTIAL_SAFE_MODULE_IDS = new Set([
+  'base.system',
+  'users.ubuntu',
+  'base.filesystem',
+  'cli.modern',
+  'lang.bun',
+  'lang.uv',
+  'lang.rust',
+  'lang.go',
+]);
+
 const CORE_POLICY_CONTRACTS: Readonly<Record<string, string>> = {
   'stack.mcp_agent_mail': '',
   'stack.beads_rust':
@@ -689,6 +700,7 @@ const INTERNAL_SCRIPTS_TO_CHECKSUM = [
   'scripts/generated/manifest_index.sh',
   'scripts/generated/doctor_checks.sh',
   'scripts/generated/install_all.sh',
+  'scripts/generated/install_w2_partial_safe.sh',
   ...MODULE_CATEGORIES.map((category) => `scripts/generated/install_${category}.sh`),
 ] as const;
 
@@ -2266,7 +2278,11 @@ export function generateInternalChecksums(
 /**
  * Generate a category install script
  */
-export function generateCategoryScript(manifest: Manifest, category: ModuleCategory): string {
+export function generateCategoryScript(
+  manifest: Manifest,
+  category: ModuleCategory,
+  outputFilename = `install_${category}.sh`,
+): string {
   // Sort the complete dependency graph before filtering. Category-local
   // sorting silently discards cross-category edges such as agents -> lang.
   const sortedModules = sortModulesByPhaseAndDependency(manifest).filter(
@@ -2277,7 +2293,7 @@ export function generateCategoryScript(manifest: Manifest, category: ModuleCateg
 
   const lines: string[] = [
     sourceOnlyHeader(
-      `ERROR: install_${category}.sh is a source-only library; run install.sh --only <module-id>`
+      `ERROR: ${outputFilename} is a source-only library; run install.sh --only <module-id>`
     ),
   ];
   lines.push(`# Category: ${category}`);
@@ -3463,6 +3479,25 @@ async function main(): Promise<void> {
     const filename = `install_${category}.sh`;
     const filepath = join(OUTPUT_DIR, filename);
     const content = generateCategoryScript(effectiveManifest, category);
+    filesToGenerate.set(filepath, { content, mode: 0o755 });
+  }
+
+  // W2 PARTIAL_SAFE is deliberately one generated artifact containing only
+  // the seven generated implementations in its exact eight-module plan.
+  // users.ubuntu remains orchestration-owned. The in-memory category rewrite
+  // lets the existing generator emit one source-only library without changing
+  // any canonical category output bytes.
+  {
+    const filename = 'install_w2_partial_safe.sh';
+    const filepath = join(OUTPUT_DIR, filename);
+    const modules = effectiveManifest.modules
+      .filter((module) => W2_PARTIAL_SAFE_MODULE_IDS.has(module.id))
+      .map((module) => ({ ...module, category: 'base' as ModuleCategory }));
+    if (modules.length !== W2_PARTIAL_SAFE_MODULE_IDS.size) {
+      throw new Error('W2 PARTIAL_SAFE module set is incomplete in the manifest');
+    }
+    const w2Manifest: Manifest = { ...effectiveManifest, modules };
+    const content = generateCategoryScript(w2Manifest, 'base', filename);
     filesToGenerate.set(filepath, { content, mode: 0o755 });
   }
 

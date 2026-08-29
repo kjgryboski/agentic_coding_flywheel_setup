@@ -135,6 +135,57 @@ if (( BASH_VERSINFO[0] >= 4 )); then
     else
         pass "validated-plan marker remains process-local"
     fi
+
+    w2_artifact="$REPO_ROOT/scripts/generated/install_w2_partial_safe.sh"
+    expected_functions=(
+        acfs_generated_install_base_system
+        acfs_generated_install_base_filesystem
+        acfs_generated_install_cli_modern
+        acfs_generated_install_lang_bun
+        acfs_generated_install_lang_uv
+        acfs_generated_install_lang_rust
+        acfs_generated_install_lang_go
+    )
+    actual_functions=()
+    if [[ -f "$w2_artifact" && ! -L "$w2_artifact" ]]; then
+        while IFS= read -r function_name; do
+            actual_functions+=("$function_name")
+        done < <(sed -n 's/^\(acfs_generated_install_[a-z0-9_]*\)() {$/\1/p' "$w2_artifact")
+    fi
+    if [[ "${actual_functions[*]}" == "${expected_functions[*]}" ]]; then
+        pass "generator-owned W2 artifact contains exactly seven safe implementations"
+    else
+        fail "generator-owned W2 artifact contains exactly seven safe implementations" "${actual_functions[*]}"
+    fi
+
+    install_total_lines="$(wc -l < "$REPO_ROOT/install.sh")"
+    source_probe_output="$({
+        head -n "$((install_total_lines - 1))" "$REPO_ROOT/install.sh"
+        printf '%s\n' \
+            'trap - EXIT INT TERM HUP' \
+            'set -e' \
+            'SCRIPT_DIR="$REPO_ROOT"' \
+            'TARGET_USER=ubuntu' \
+            'TARGET_HOME=/home/ubuntu' \
+            'export TARGET_USER TARGET_HOME ACFS_PARTIAL_SAFE_ALLOWLIST_FILE="$ALLOWLIST"' \
+            'acfs_enforce_early_license_exclusion install' \
+            'parse_args --yes --only users.ubuntu --only base.filesystem --only cli.modern --only lang.bun --only lang.uv --only lang.rust --only lang.go' \
+            'normalize_read_only_modes' \
+            'detect_environment' \
+            'acfs_apply_legacy_skips' \
+            'acfs_resolve_selection' \
+            'ACFS_R1_SELECTION_RESOLVED=true' \
+            'source_generated_installers' \
+            'printf "SOURCE=%s\\n" "${ACFS_GENERATED_SOURCED_PATHS[@]}"'
+    } | env REPO_ROOT="$REPO_ROOT" ALLOWLIST="$ALLOWLIST" bash 2>/dev/null)"
+    expected_source="SOURCE=$w2_artifact"
+    if [[ "$source_probe_output" == *"$expected_source"* ]] \
+        && [[ "$(printf '%s\n' "$source_probe_output" | grep -c '^SOURCE=')" -eq 1 ]]; then
+        pass "real eight-module load sources the exact W2 artifact with zero extras"
+    else
+        fail "real eight-module load sources the exact W2 artifact with zero extras" "$source_probe_output"
+    fi
+
     ACFS_EFFECTIVE_PLAN+=(stack.mcp_agent_mail)
     if acfs_r1_runtime_validate_plan >/dev/null 2>&1; then
         fail "held plan intersection fails closed" "held plan unexpectedly admitted"
