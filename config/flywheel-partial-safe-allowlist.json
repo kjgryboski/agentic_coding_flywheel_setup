@@ -52,10 +52,19 @@
     "approved_candidates": []
   },
   "commissioning_scope": {
-    "supported_hosts": [
-      "codex-bright-tide-b56c",
-      "agent-flywheel-ubuntu2404"
-    ],
+    "qualification_host_contract": {
+      "id": "agent-flywheel.qualification-host/v1",
+      "host_identity": "any-compliant-host",
+      "ubuntu_version": "24.04",
+      "architectures": [
+        "aarch64",
+        "x86_64"
+      ],
+      "minimum_disk_gib": 20,
+      "minimum_bash_major": 4,
+      "isolation_required": true,
+      "clean_source_identity_required": true
+    },
     "services_allowed": [],
     "network_provider_notification_execution": false,
     "claim": "PARTIAL_SAFE",

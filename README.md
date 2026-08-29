@@ -45,6 +45,25 @@
 
 The installer is **idempotent**—if interrupted, simply re-run it. It will automatically resume from the last completed phase without prompts.
 
+### Flywheel on Mac
+
+The supported Mac path runs the Flywheel inside an isolated Ubuntu 24.04 VM;
+native macOS is the control host, not the installation target. Any Linux host
+can qualify when it satisfies the published contract (Ubuntu 24.04, `aarch64`
+or `x86_64`, Bash 4+, at least 20 GiB free, VM isolation, and a clean exact
+source checkout). No specifically named machine is required.
+
+```bash
+flywheel mac install
+flywheel start
+flywheel status --json
+flywheel doctor --json
+flywheel stop
+```
+
+The current scope is `PARTIAL_SAFE`: eight approved modules are installed and
+27 licensing-held modules remain blocked before lifecycle activity.
+
 > **Production environments:** For stable, reproducible installs, pin to a tagged release or specific commit:
 > ```bash
 > # Preferred: use a tagged release (e.g., v0.5.0)

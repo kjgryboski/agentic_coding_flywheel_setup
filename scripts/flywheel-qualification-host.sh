@@ -5,6 +5,7 @@ umask 022
 
 SOURCE_ROOT="${FLYWHEEL_SOURCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 MIN_DISK_GIB="${FLYWHEEL_MIN_DISK_GIB:-20}"
+OS_RELEASE_FILE="${FLYWHEEL_OS_RELEASE_FILE:-/etc/os-release}"
 FORMAT="text"
 
 usage() {
@@ -33,9 +34,9 @@ record() {
 
 os_id=""
 os_version=""
-if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    source /etc/os-release
+if [[ -r "$OS_RELEASE_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$OS_RELEASE_FILE"
     os_id="${ID:-}"
     os_version="${VERSION_ID:-}"
 fi
@@ -51,9 +52,10 @@ case "$arch" in
     *) record architecture fail "unsupported architecture ${arch:-unknown}" ;;
 esac
 
-bash_major="${BASH_VERSINFO[0]:-0}"
+bash_major="${FLYWHEEL_BASH_MAJOR:-${BASH_VERSINFO[0]:-0}}"
+bash_version="${FLYWHEEL_BASH_VERSION:-${BASH_VERSION:-unknown}}"
 if ((bash_major >= 4)); then
-    record bash_runtime pass "bash ${BASH_VERSION:-unknown}"
+    record bash_runtime pass "bash $bash_version"
 else
     record bash_runtime fail "Bash 4+ required"
 fi
@@ -97,11 +99,20 @@ for line in sys.stdin:
 failures=sum(row["status"] != "pass" for row in rows)
 print(json.dumps({
     "schema":"agent-flywheel.qualification-host/v1",
+    "contract":{
+        "host_identity":"any-compliant-host",
+        "ubuntu_version":"24.04",
+        "architectures":["aarch64","x86_64"],
+        "minimum_disk_gib":int(sys.argv[1]),
+        "minimum_bash_major":4,
+        "isolation_required":True,
+        "clean_source_identity_required":True,
+    },
     "status":"pass" if failures == 0 else "fail",
     "requirements":rows,
     "summary":{"pass":len(rows)-failures,"fail":failures},
 },sort_keys=True,separators=(",",":")))
-'
+' "$MIN_DISK_GIB"
 else
     for item in "${checks[@]}"; do
         IFS=$'\t' read -r id status detail <<<"$item"

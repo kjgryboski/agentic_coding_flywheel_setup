@@ -137,7 +137,7 @@ ACFS_LICENSE_POLICY_REASON=""
 # U6/R1 default HOLD.  The caller must name the exact immutable allowlist file;
 # no Boolean flag, environment-only assertion, or inferred license status can
 # activate this path.
-ACFS_W2_PARTIAL_SAFE_ALLOWLIST_SHA256="75897c7654e5a24a2a62dcdb00b8bd3b619055df1450e2893a0464c62ad54f1a"
+ACFS_W2_PARTIAL_SAFE_ALLOWLIST_SHA256="736ce053c42c91b4219cc13dde7a604c33158e1369f3d4d91031672da80f3633"
 ACFS_W2_PARTIAL_SAFE_SEED_CSV="users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go"
 ACFS_W2_PARTIAL_SAFE_PLAN_CSV="base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go"
 ACFS_W2_PARTIAL_SAFE_POLICY_REASON=""
