@@ -1135,6 +1135,25 @@ describe('Generated script headers', () => {
       'Orchestrator-owned modules omitted from this library: users.ubuntu'
     );
     expect(usersContent).not.toContain('acfs_generated_install_users_ubuntu() {');
+
+    const w2Content = readFileSync(
+      resolve(GENERATED_DIR, 'install_w2_partial_safe.sh'),
+      'utf-8'
+    );
+    expect(w2Content).toContain(
+      'workspace_agents_source="${ACFS_ASSETS_DIR:-}/AGENTS.md"'
+    );
+    expect(w2Content).toContain('[[ ! -f "$workspace_agents_source" ]]');
+    expect(w2Content).toContain('[[ -L "$workspace_agents_source" ]]');
+    expect(w2Content).toContain(
+      'cp -- "$workspace_agents_source" "$target_home/.acfs/docs/AGENTS.workspace.md"'
+    );
+    expect(w2Content).not.toContain(
+      '"${ACFS_RAW}/acfs/AGENTS.md"'
+    );
+    expect(w2Content).toContain(
+      'expected_sha256="92e8554321e2bde08c9b1445dae47a65360f885274f31df51cdc2f9faa84e001"'
+    );
   });
 
   test('direct generated install harnesses refuse before runtime setup', () => {

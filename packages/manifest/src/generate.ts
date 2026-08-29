@@ -70,6 +70,49 @@ const W2_PARTIAL_SAFE_MODULE_IDS = new Set([
   'lang.go',
 ]);
 
+const W2_PARTIAL_SAFE_VERIFIED_INSTALLER_SHA256: Readonly<Record<string, string>> = {
+  'lang.uv': '92e8554321e2bde08c9b1445dae47a65360f885274f31df51cdc2f9faa84e001',
+};
+
+function adaptW2PartialSafeModule(module: Module): Module {
+  if (module.id !== 'base.filesystem') {
+    return { ...module, category: 'base' as ModuleCategory };
+  }
+
+  const fetchStart = '# Save the workspace AGENTS.md template into ACFS-owned storage.';
+  const seedStart = '# Seed /data/projects/AGENTS.md ONLY when absent.';
+  let replacements = 0;
+  const install = module.install.map((command) => {
+    const start = command.indexOf(fetchStart);
+    const end = command.indexOf(seedStart);
+    if (start < 0 || end <= start) {
+      return command;
+    }
+
+    replacements += 1;
+    const localCopy = `# The immutable W2 path runs from a verified source tree. Use its
+# ledger-bound workspace template instead of fetching an unpublished
+# exact candidate commit from the network.
+workspace_agents_source="\${ACFS_ASSETS_DIR:-}/AGENTS.md"
+if [[ -z "\${ACFS_ASSETS_DIR:-}" ]] || [[ ! -f "$workspace_agents_source" ]] || [[ -L "$workspace_agents_source" ]]; then
+  echo "ERROR: Verified local workspace AGENTS.md is unavailable" >&2
+  exit 1
+fi
+mkdir -p "$target_home/.acfs/docs"
+cp -- "$workspace_agents_source" "$target_home/.acfs/docs/AGENTS.workspace.md"
+chown -R "\${TARGET_USER:-ubuntu}:\${TARGET_USER:-ubuntu}" "$target_home/.acfs/docs" 2>/dev/null || true
+
+`;
+    return command.slice(0, start) + localCopy + command.slice(end);
+  });
+
+  if (replacements !== 1) {
+    throw new Error('W2 PARTIAL_SAFE base.filesystem local-asset rewrite did not match exactly once');
+  }
+
+  return { ...module, category: 'base' as ModuleCategory, install };
+}
+
 const CORE_POLICY_CONTRACTS: Readonly<Record<string, string>> = {
   'stack.mcp_agent_mail': '',
   'stack.beads_rust':
@@ -1394,7 +1437,10 @@ function sortModulesByPhaseAndDependency(manifest: Manifest): Module[] {
   return ordered;
 }
 
-function generateVerifiedInstallerSnippet(module: Module): string[] {
+function generateVerifiedInstallerSnippet(
+  module: Module,
+  expectedSha256Override?: string,
+): string[] {
   const vi = module.verified_installer!;
   if (module.run_as !== 'target_user') {
     throw new Error(
@@ -1402,6 +1448,9 @@ function generateVerifiedInstallerSnippet(module: Module): string[] {
     );
   }
   const tool = vi.tool;
+  if (expectedSha256Override && !/^[0-9a-f]{64}$/.test(expectedSha256Override)) {
+    throw new Error(`SECURITY: invalid verified-installer SHA-256 override for ${module.id}`);
+  }
   const tmpdirEnvValue = verifiedInstallerTmpdirEnvValue(module);
   const hasTmpdirEnv = Boolean(tmpdirEnvValue);
 
@@ -1498,11 +1547,15 @@ function generateVerifiedInstallerSnippet(module: Module): string[] {
     '',
     '        # Safe access with explicit empty default',
     '        url="${KNOWN_INSTALLERS[$tool]:-}"',
-    '        if ! expected_sha256="$(get_checksum "$tool")"; then',
-    `            log_error "${escapeBash(module.id)}: get_checksum failed for tool '$tool'"`,
-    '            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"',
-    '            expected_sha256=""',
-    '        fi',
+    ...(expectedSha256Override
+      ? [`        expected_sha256="${expectedSha256Override}"`]
+      : [
+          '        if ! expected_sha256="$(get_checksum "$tool")"; then',
+          `            log_error "${escapeBash(module.id)}: get_checksum failed for tool '$tool'"`,
+          '            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"',
+          '            expected_sha256=""',
+          '        fi',
+        ]),
     '',
     '        if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then',
     '            if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then',
@@ -1875,7 +1928,7 @@ function summarizeShellBlock(blockLines: string[], fallback: string): string {
  * Generate the install commands for a module
  * Uses run_as_*_shell heredocs for proper user context execution
  */
-function generateInstallCommands(module: Module): string[] {
+function generateInstallCommands(module: Module, expectedSha256Override?: string): string[] {
   const lines: string[] = [];
 
   lines.push(...generatePreInstallCheck(module));
@@ -1884,7 +1937,7 @@ function generateInstallCommands(module: Module): string[] {
   // Note: verified_installer runs in current context since it needs access to security.sh
   // The verified bytes are staged completely before the runner opens the file.
   if (module.verified_installer) {
-    const snippet = generateVerifiedInstallerSnippet(module);
+    const snippet = generateVerifiedInstallerSnippet(module, expectedSha256Override);
     const summary = `verified installer: ${module.id}`;
     lines.push(...wrapCommandBlock(module, summary, snippet, 'verified installer failed'));
   }
@@ -2282,6 +2335,7 @@ export function generateCategoryScript(
   manifest: Manifest,
   category: ModuleCategory,
   outputFilename = `install_${category}.sh`,
+  verifiedInstallerSha256Overrides: Readonly<Record<string, string>> = {},
 ): string {
   // Sort the complete dependency graph before filtering. Category-local
   // sorting silently discards cross-category edges such as agents -> lang.
@@ -2378,7 +2432,7 @@ export function generateCategoryScript(
     }
 
     // Install commands
-    lines.push(...generateInstallCommands(module));
+    lines.push(...generateInstallCommands(module, verifiedInstallerSha256Overrides[module.id]));
     lines.push('');
 
     if (module.id === 'stack.beads_rust' || module.id === 'stack.beads_viewer') {
@@ -3492,12 +3546,17 @@ async function main(): Promise<void> {
     const filepath = join(OUTPUT_DIR, filename);
     const modules = effectiveManifest.modules
       .filter((module) => W2_PARTIAL_SAFE_MODULE_IDS.has(module.id))
-      .map((module) => ({ ...module, category: 'base' as ModuleCategory }));
+      .map(adaptW2PartialSafeModule);
     if (modules.length !== W2_PARTIAL_SAFE_MODULE_IDS.size) {
       throw new Error('W2 PARTIAL_SAFE module set is incomplete in the manifest');
     }
     const w2Manifest: Manifest = { ...effectiveManifest, modules };
-    const content = generateCategoryScript(w2Manifest, 'base', filename);
+    const content = generateCategoryScript(
+      w2Manifest,
+      'base',
+      filename,
+      W2_PARTIAL_SAFE_VERIFIED_INSTALLER_SHA256,
+    );
     filesToGenerate.set(filepath, { content, mode: 0o755 });
   }
 

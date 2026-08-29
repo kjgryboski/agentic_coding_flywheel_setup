@@ -690,15 +690,16 @@ fi
 mkdir -p "$target_home/.acfs"
 chown -hR "${TARGET_USER:-ubuntu}:${TARGET_USER:-ubuntu}" "$target_home/.acfs"
 
-# Save the workspace AGENTS.md template into ACFS-owned storage.
-# ACFS may freely refresh this canonical copy on every install/update.
-ACFS_RAW="${ACFS_RAW:-https://raw.githubusercontent.com/Dicklesworthstone/agentic_coding_flywheel_setup/${ACFS_REF:-main}}"
-CURL_ARGS=(-q -fsSL)
-if curl -q --help all 2>/dev/null | grep -q -- '--proto'; then
-  CURL_ARGS=(-q --proto '=https' --proto-redir '=https' -fsSL)
+# The immutable W2 path runs from a verified source tree. Use its
+# ledger-bound workspace template instead of fetching an unpublished
+# exact candidate commit from the network.
+workspace_agents_source="${ACFS_ASSETS_DIR:-}/AGENTS.md"
+if [[ -z "${ACFS_ASSETS_DIR:-}" ]] || [[ ! -f "$workspace_agents_source" ]] || [[ -L "$workspace_agents_source" ]]; then
+  echo "ERROR: Verified local workspace AGENTS.md is unavailable" >&2
+  exit 1
 fi
 mkdir -p "$target_home/.acfs/docs"
-curl "${CURL_ARGS[@]}" -o "$target_home/.acfs/docs/AGENTS.workspace.md" "${ACFS_RAW}/acfs/AGENTS.md" || true
+cp -- "$workspace_agents_source" "$target_home/.acfs/docs/AGENTS.workspace.md"
 chown -R "${TARGET_USER:-ubuntu}:${TARGET_USER:-ubuntu}" "$target_home/.acfs/docs" 2>/dev/null || true
 
 # Seed /data/projects/AGENTS.md ONLY when absent. An existing file
@@ -1360,11 +1361,7 @@ acfs_generated_install_lang_uv() {
 
                     # Safe access with explicit empty default
                     url="${KNOWN_INSTALLERS[$tool]:-}"
-                    if ! expected_sha256="$(get_checksum "$tool")"; then
-                        log_error "lang.uv: get_checksum failed for tool '$tool'"
-                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        expected_sha256=""
-                    fi
+                    expected_sha256="92e8554321e2bde08c9b1445dae47a65360f885274f31df51cdc2f9faa84e001"
 
                     if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
                         if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
