@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
+import stat
 import subprocess
 import sys
 from typing import Any
@@ -49,12 +51,36 @@ def git(root: pathlib.Path, *arguments: str) -> str:
     return completed.stdout.decode("utf-8", errors="replace")
 
 
-def sha256_file(path: pathlib.Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while block := handle.read(65536):
-            digest.update(block)
-    return digest.hexdigest()
+def stable_read(path: pathlib.Path, maximum_bytes: int, label: str) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ControlError(f"{label} is unavailable or unsafe: {path}") from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ControlError(f"{label} must be a regular file: {path}")
+        if before.st_size > maximum_bytes:
+            raise ControlError(f"{label} exceeds {maximum_bytes} bytes: {path}")
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(65536, remaining))
+            if not block:
+                raise ControlError(f"{label} ended while being read: {path}")
+            chunks.append(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1):
+            raise ControlError(f"{label} grew while being read: {path}")
+        after = os.fstat(descriptor)
+        identity_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        identity_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        if identity_after != identity_before:
+            raise ControlError(f"{label} changed while being read: {path}")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def repository_files(root: pathlib.Path) -> list[str]:
@@ -72,7 +98,8 @@ def inspect_repository(candidate: str) -> dict[str, Any]:
     head = git(root, "rev-parse", "HEAD").strip()
     tree = git(root, "rev-parse", "HEAD^{tree}").strip()
     branch = git(root, "symbolic-ref", "--quiet", "--short", "HEAD").strip() if _has_branch(root) else None
-    status_records = [item for item in git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all").split("\0") if item]
+    status_output = git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    status_records = [item for item in status_output.split("\0") if item]
     files = repository_files(root)
     agents_files = [path for path in files if pathlib.PurePosixPath(path).name == "AGENTS.md"]
     unresolved = [path for path in files if path.endswith(".acfs-new")]
@@ -90,11 +117,20 @@ def inspect_repository(candidate: str) -> dict[str, Any]:
     root_agents = root / "AGENTS.md"
     root_agents_receipt = None
     if root_agents.is_file() and not root_agents.is_symlink():
+        root_agents_raw = stable_read(root_agents, 4 * 1024 * 1024, "AGENTS.md")
         root_agents_receipt = {
             "path": "AGENTS.md",
-            "sha256": sha256_file(root_agents),
-            "size": root_agents.stat().st_size,
+            "sha256": hashlib.sha256(root_agents_raw).hexdigest(),
+            "size": len(root_agents_raw),
         }
+
+    final_identity = (
+        git(root, "rev-parse", "HEAD").strip(),
+        git(root, "rev-parse", "HEAD^{tree}").strip(),
+        git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+    )
+    if final_identity != (head, tree, status_output):
+        raise ControlError(f"Repository changed while being inspected: {root}")
 
     clean = not status_records
     setup_pr_eligible = clean and not unresolved
@@ -158,9 +194,7 @@ def read_inventory(path: pathlib.Path) -> tuple[dict[str, Any], str]:
         path = path.resolve()
     if path.is_symlink() or not path.is_file():
         raise ControlError(f"Rollout inventory must be a regular file: {path}")
-    raw = path.read_bytes()
-    if len(raw) > 1024 * 1024:
-        raise ControlError("Rollout inventory exceeds 1 MiB")
+    raw = stable_read(path, 1024 * 1024, "rollout inventory")
     try:
         value = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
