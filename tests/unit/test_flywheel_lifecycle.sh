@@ -20,7 +20,14 @@ case "${1:-}" in
         ;;
     shell)
         printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
-        printf '{"claim":"PARTIAL_SAFE","status":"pass"}\n'
+        case "$*" in
+            *flywheel-qualification-host.sh*)
+                printf '{"schema":"agent-flywheel.qualification-host/v1","status":"pass","summary":{"pass":6,"fail":0}}\n'
+                ;;
+            *flywheel-partial-safe-doctor.sh*)
+                printf '{"schema":"agent-flywheel.partial-safe-doctor/v1","claim":"PARTIAL_SAFE","status":"pass","summary":{"pass":13,"warn":0,"fail":0}}\n'
+                ;;
+        esac
         ;;
     stop)
         printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
@@ -71,10 +78,15 @@ assert "supported_hosts" not in value["commissioning_scope"]
 PY
 
 QUALIFICATION_ROOT="$TEST_ROOT/qualification-source"
-mkdir -p "$QUALIFICATION_ROOT"
+mkdir -p "$QUALIFICATION_ROOT/config"
 git -C "$QUALIFICATION_ROOT" init -q
+printf 'schema_version: 2\n' >"$QUALIFICATION_ROOT/acfs.manifest.yaml"
+printf '0.8.0\n' >"$QUALIFICATION_ROOT/VERSION"
+cp "$REPO_ROOT/config/flywheel-partial-safe-allowlist.json" \
+    "$QUALIFICATION_ROOT/config/flywheel-partial-safe-allowlist.json"
+git -C "$QUALIFICATION_ROOT" add acfs.manifest.yaml VERSION config/flywheel-partial-safe-allowlist.json
 git -C "$QUALIFICATION_ROOT" -c user.name=Flywheel -c user.email=flywheel.invalid@example.test \
-    commit --allow-empty -qm initial
+    commit -qm initial
 printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$TEST_ROOT/os-release"
 cat >"$TEST_ROOT/uname" <<'SH'
 #!/usr/bin/env bash
@@ -108,27 +120,94 @@ assert value["contract"]["architectures"] == ["aarch64","x86_64"]
 assert value["contract"]["minimum_disk_gib"] == 20
 ' "$qualification_json"
 
+export FLYWHEEL_SOURCE_REPO="$QUALIFICATION_ROOT"
+HOME="$TEST_ROOT/home" "$REPO_ROOT/flywheel" mac install --quiet
+python3 - "$FLYWHEEL_STATE_HOME/installation.json" "$QUALIFICATION_ROOT" <<'PY'
+import json
+import subprocess
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+head = subprocess.check_output(["git", "-C", sys.argv[2], "rev-parse", "HEAD"], text=True).strip()
+tree = subprocess.check_output(["git", "-C", sys.argv[2], "rev-parse", "HEAD^{tree}"], text=True).strip()
+assert value["schema"] == "agent-flywheel.installation/v1"
+assert value["source"]["head"] == head
+assert value["source"]["tree"] == tree
+assert len(value["bundle"]["sha256"]) == 64
+assert value["modules"] == {"approved": 8, "licensing_held": 27}
+PY
+
 status_rc=0
 status_json="$("$REPO_ROOT/flywheel" status --json)" || status_rc=$?
 [[ "$status_rc" -eq 1 ]]
 python3 -c '
 import json,sys
 value=json.loads(sys.argv[1])
-assert value == {
-    "claim":"PARTIAL_SAFE",
-    "schema":"agent-flywheel.status/v1",
-    "status":"Stopped",
-    "vm":"agent-flywheel-ubuntu2404",
-}
+assert value["schema"] == "agent-flywheel.status/v2"
+assert value["claim"] == "PARTIAL_SAFE"
+assert value["status"] == "Stopped"
+assert value["readiness"] == "attention"
+assert value["vm"] == {"healthy":False,"name":"agent-flywheel-ubuntu2404","status":"Stopped"}
+assert value["source"]["clean"] is True
+assert value["source"]["matches_installation"] is True
+assert value["installation"]["status"] == "recorded"
+assert value["installation"]["matches_current_allowlist"] is True
+assert value["modules"]["approved_count"] == 8
+assert value["modules"]["pending_licensing_approvals"] == 27
+assert value["repository_rollout"] == {"status":"not_connected"}
+assert any(item["code"] == "vm_not_running" for item in value["blockers"])
 ' "$status_json"
 
 "$REPO_ROOT/flywheel" start --quiet
 grep -F -- '--stateful -- '"$TEST_ROOT/limactl"' start agent-flywheel-ubuntu2404' "$CALLS" >/dev/null
 
 printf 'Running\n' >"$STATUS_FILE"
+running_json="$("$REPO_ROOT/flywheel" status --json)"
+[[ "$running_json" == "$("$REPO_ROOT/flywheel" status --json)" ]]
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["readiness"] == "ready"
+assert value["qualification"]["status"] == "pass"
+assert value["doctor"]["status"] == "pass"
+assert [item["code"] for item in value["blockers"]] == ["receipt_not_connected"]
+' "$running_json"
+
+printf '{"schema":"agent-flywheel.repository-rollout/v1","status":"pass","scope":"synthetic-pilot-only","repository":"synthetic/local","bookclub_eligible":true}\n' \
+    >"$TEST_ROOT/rollout.json"
+rollout_json="$("$REPO_ROOT/flywheel" status --json --rollout-receipt "$TEST_ROOT/rollout.json")"
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+rollout=value["repository_rollout"]
+assert rollout["status"] == "evidence_connected"
+assert rollout["scope"] == "synthetic-pilot-only"
+assert rollout["bookclub_eligible"] is True
+assert len(rollout["receipt_sha256"]) == 64
+assert [item["code"] for item in value["blockers"]] == ["live_rollout_not_proven"]
+' "$rollout_json"
+
 doctor_json="$("$REPO_ROOT/flywheel" doctor --json)"
 python3 -c 'import json,sys; value=json.loads(sys.argv[1]); assert value["status"] == "pass"' "$doctor_json"
 grep -F -- 'scripts/flywheel-partial-safe-doctor.sh --json' "$CALLS" >/dev/null
+
+capabilities_json="$("$REPO_ROOT/flywheel" capabilities --json)"
+[[ "$capabilities_json" == "$("$REPO_ROOT/flywheel" capabilities --json)" ]]
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["schema"] == "agent-flywheel.capabilities/v1"
+assert value["exit_codes"]["5"] == "operation_conflict"
+assert value["feature_flags"]["portable_qualification_host"] is True
+assert any(item["command"] == "flywheel status --json" for item in value["commands"])
+' "$capabilities_json"
+"$REPO_ROOT/flywheel" robot-docs guide | grep -F 'flywheel status --json --rollout-receipt FILE' >/dev/null
+
+typo_rc=0
+typo_error="$("$REPO_ROOT/flywheel" statsu 2>&1)" || typo_rc=$?
+[[ "$typo_rc" -eq 2 ]]
+[[ "$typo_error" == *'did you mean: flywheel status --json'* ]]
 
 "$REPO_ROOT/flywheel" stop --quiet
 grep -F -- 'stop agent-flywheel-ubuntu2404' "$CALLS" >/dev/null

@@ -6,9 +6,11 @@ umask 022
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/${BASH_SOURCE[0]##*/}"
 STATE_HOME="${FLYWHEEL_STATE_HOME:-$HOME/.local/share/agent-flywheel}"
 SOURCE_POINTER="$STATE_HOME/source-root"
+INSTALL_RECEIPT="$STATE_HOME/installation.json"
 VM_NAME="${FLYWHEEL_VM_NAME:-agent-flywheel-ubuntu2404}"
 HEAVY_RUN="${FLYWHEEL_HEAVY_RUN:-$HOME/.local/bin/codex-heavy-run}"
 LIMACTL="${FLYWHEEL_LIMACTL:-$(command -v limactl 2>/dev/null || true)}"
+ROLLOUT_RECEIPT="${FLYWHEEL_ROLLOUT_RECEIPT:-}"
 QUIET=0
 JSON=0
 NO_GUM=0
@@ -30,15 +32,25 @@ usage() {
 Usage:
   flywheel mac install
   flywheel start
-  flywheel status [--json]
+  flywheel status [--json] [--rollout-receipt FILE]
   flywheel doctor [--json]
   flywheel stop
+  flywheel capabilities --json
+  flywheel robot-docs guide
 
 Options:
-  --json       machine-readable status or doctor output
-  --quiet      suppress non-error progress
-  --no-gum     disable optional gum formatting
-  -h, --help   show this help
+  --json                  machine-readable read-side output
+  --rollout-receipt FILE  attach one repository rollout evidence receipt
+  --quiet                 suppress non-error progress
+  --no-gum                disable optional gum formatting
+  -h, --help              show this help
+
+Exit codes:
+  0  command completed successfully
+  1  status or doctor completed and found an unhealthy state
+  2  invalid invocation or safety refusal
+  3  required host environment is unavailable
+  5  another operation owns the requested state
 
 The Mac command manages the supported Ubuntu VM. Native macOS is not treated
 as an ACFS installation. The current installation scope is PARTIAL_SAFE: eight
@@ -65,11 +77,13 @@ ok() {
 }
 
 die() {
+    local code="$1"
+    shift
     printf 'Flywheel: %s\n' "$*" >&2
-    exit 1
+    exit "$code"
 }
 
-source_root() {
+find_source_root() {
     local self_dir="${SELF%/*}"
     local candidate="${FLYWHEEL_SOURCE_REPO:-}"
     if [[ -z "$candidate" && -f "$self_dir/acfs.manifest.yaml" ]]; then
@@ -79,13 +93,20 @@ source_root() {
         IFS= read -r candidate <"$SOURCE_POINTER"
     fi
     [[ -n "$candidate" && "$candidate" == /* && -f "$candidate/acfs.manifest.yaml" ]] \
-        || die "cannot locate the ACFS source checkout; set FLYWHEEL_SOURCE_REPO"
+        || return 1
     (cd "$candidate" && pwd -P)
 }
 
+source_root() {
+    find_source_root \
+        || die 3 "cannot locate the ACFS source checkout; set FLYWHEEL_SOURCE_REPO"
+}
+
 require_mac_tools() {
-    [[ "$(uname -s)" == "Darwin" ]] || die "Mac lifecycle commands require macOS"
-    [[ -n "$LIMACTL" && -x "$LIMACTL" ]] || die "Lima is required (limactl not found)"
+    [[ "$(uname -s)" == "Darwin" ]] \
+        || die 3 "Mac lifecycle commands require macOS"
+    [[ -n "$LIMACTL" && -x "$LIMACTL" ]] \
+        || die 3 "Lima is required; install it, then retry the same command"
 }
 
 vm_status() {
@@ -108,7 +129,8 @@ ensure_running() {
     if [[ "$status" == "Running" ]]; then
         return 0
     fi
-    [[ -x "$HEAVY_RUN" ]] || die "the Mac heavy-work safety guard is unavailable"
+    [[ -x "$HEAVY_RUN" ]] \
+        || die 3 "the Mac heavy-work safety guard is unavailable; restore $HEAVY_RUN, then run flywheel start"
     info "Starting the Ubuntu Flywheel"
     "$HEAVY_RUN" --stateful -- "$LIMACTL" start "$VM_NAME"
 }
@@ -119,8 +141,12 @@ acquire_install_lock() {
     chmod 0700 "$STATE_HOME" "$lock_root"
     LOCK_DIR="$lock_root/install.lock"
     if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-        die "another Flywheel install is already running"
+        die 5 "another Flywheel install is already running; retry flywheel mac install after it finishes"
     fi
+}
+
+sha256_file() {
+    shasum -a 256 "$1" | awk '{print $1}'
 }
 
 stage_source() {
@@ -128,10 +154,12 @@ stage_source() {
     local head="$2"
     local short="${head:0:12}"
     local bundle="$TEMP_ROOT/acfs-$short.bundle"
+    local bundle_sha256=""
     local guest_bundle="/var/tmp/agent-flywheel-acfs-$head.bundle"
     local guest_root="/opt/agent-flywheel-acfs-$head"
 
     git -C "$root" bundle create "$bundle" HEAD
+    bundle_sha256="$(sha256_file "$bundle")"
     "$LIMACTL" copy --backend=scp "$bundle" "$VM_NAME:$guest_bundle" >/dev/null
     "$LIMACTL" shell "$VM_NAME" -- bash -lc '
 set -euo pipefail
@@ -146,26 +174,69 @@ sudo git -C "$guest_root" diff --quiet
 sudo git -C "$guest_root" diff --cached --quiet
 test -z "$(sudo git -C "$guest_root" ls-files --others --exclude-standard)"
 ' -- "$guest_bundle" "$guest_root" "$head"
-    printf '%s\n' "$guest_root"
+    printf '%s\t%s\n' "$guest_root" "$bundle_sha256"
+}
+
+write_install_receipt() {
+    local root="$1"
+    local head="$2"
+    local tree="$3"
+    local guest_root="$4"
+    local bundle_sha256="$5"
+    local allowlist="$root/config/flywheel-partial-safe-allowlist.json"
+    local allowlist_sha256=""
+    local candidate="$TEMP_ROOT/installation.json"
+    allowlist_sha256="$(sha256_file "$allowlist")"
+    python3 - "$head" "$tree" "$guest_root" "$bundle_sha256" "$allowlist_sha256" "$allowlist" <<'PY' >"$candidate"
+import datetime
+import json
+import sys
+
+head, tree, guest_root, bundle_sha256, allowlist_sha256, allowlist_path = sys.argv[1:]
+with open(allowlist_path, encoding="utf-8") as handle:
+    allowlist = json.load(handle)
+print(json.dumps({
+    "schema": "agent-flywheel.installation/v1",
+    "claim": "PARTIAL_SAFE",
+    "installed_at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat(),
+    "source": {"head": head, "tree": tree, "guest_root": guest_root},
+    "bundle": {"sha256": bundle_sha256},
+    "allowlist": {"sha256": allowlist_sha256},
+    "modules": {
+        "approved": len(allowlist["allowed_resolved_modules"]),
+        "licensing_held": allowlist["held_exclusions"]["count"],
+    },
+}, sort_keys=True, separators=(",", ":")))
+PY
+    install -m 0600 "$candidate" "$INSTALL_RECEIPT"
 }
 
 install_command() {
     require_mac_tools
     local root=""
     local head=""
+    local tree=""
     local guest_root=""
+    local bundle_sha256=""
+    local stage_result=""
     root="$(source_root)"
-    git -C "$root" diff --quiet || die "source checkout has uncommitted changes"
-    git -C "$root" diff --cached --quiet || die "source checkout has staged changes"
+    git -C "$root" diff --quiet \
+        || die 2 "source checkout has uncommitted changes; commit or preserve them before flywheel mac install"
+    git -C "$root" diff --cached --quiet \
+        || die 2 "source checkout has staged changes; commit or preserve them before flywheel mac install"
     [[ -z "$(git -C "$root" ls-files --others --exclude-standard)" ]] \
-        || die "source checkout has untracked files"
+        || die 2 "source checkout has untracked files; preserve them before flywheel mac install"
     head="$(git -C "$root" rev-parse HEAD)"
+    tree="$(git -C "$root" rev-parse 'HEAD^{tree}')"
 
     acquire_install_lock
     TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flywheel-install.XXXXXXXX")"
     ensure_running
     info "Staging exact source $head"
-    guest_root="$(stage_source "$root" "$head")"
+    stage_result="$(stage_source "$root" "$head")"
+    IFS=$'\t' read -r guest_root bundle_sha256 <<<"$stage_result"
+    [[ -n "$guest_root" && -n "$bundle_sha256" ]] \
+        || die 3 "exact-source staging produced no identity; rerun flywheel mac install"
     info "Commissioning the eight-module PARTIAL_SAFE profile"
     "$HEAVY_RUN" --stateful -- "$LIMACTL" shell "$VM_NAME" -- \
         sudo bash -p "$guest_root/scripts/flywheel-mac-install-guest.sh" "$guest_root"
@@ -174,6 +245,7 @@ install_command() {
     chmod 0700 "$STATE_HOME"
     printf '%s\n' "$root" >"$SOURCE_POINTER"
     chmod 0600 "$SOURCE_POINTER"
+    write_install_receipt "$root" "$head" "$tree" "$guest_root" "$bundle_sha256"
     install -m 0755 "$SELF" "$HOME/.local/bin/flywheel"
     ok "Flywheel is installed on Ubuntu and available as flywheel"
 }
@@ -191,19 +263,242 @@ start_command() {
 status_command() {
     require_mac_tools
     local status=""
+    local root=""
+    local head=""
+    local tree=""
+    local source_clean="false"
+    local allowlist=""
+    local qualification_json=""
+    local doctor_json=""
+    local status_json=""
     status="$(vm_status 2>/dev/null || true)"
     [[ -n "$status" ]] || status="Missing"
-    if ((JSON == 1)); then
-        python3 -c 'import json,sys; print(json.dumps({"schema":"agent-flywheel.status/v1","vm":sys.argv[1],"status":sys.argv[2],"claim":"PARTIAL_SAFE"},sort_keys=True,separators=(",",":")))' "$VM_NAME" "$status"
-    else
-        printf 'Flywheel VM: %s\nStatus: %s\nClaim: PARTIAL_SAFE\n' "$VM_NAME" "$status"
+    root="$(find_source_root 2>/dev/null || true)"
+    if [[ -n "$root" ]]; then
+        head="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
+        tree="$(git -C "$root" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+        allowlist="$root/config/flywheel-partial-safe-allowlist.json"
+        if git -C "$root" diff --quiet \
+            && git -C "$root" diff --cached --quiet \
+            && [[ -z "$(git -C "$root" ls-files --others --exclude-standard)" ]]; then
+            source_clean="true"
+        fi
     fi
-    [[ "$status" == "Running" ]]
+    if [[ "$status" == "Running" && -n "$root" && -n "$head" ]]; then
+        set +e
+        qualification_json="$(qualification_command "$head" 2>/dev/null)"
+        doctor_json="$(doctor_command --json-internal 2>/dev/null)"
+        set -e
+    fi
+    status_json="$(python3 - "$VM_NAME" "$status" "$root" "$head" "$tree" "$source_clean" "$INSTALL_RECEIPT" "$allowlist" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+(
+    vm_name,
+    vm_status,
+    source_root,
+    source_head,
+    source_tree,
+    source_clean_raw,
+    install_receipt_path,
+    allowlist_path,
+    rollout_receipt_path,
+    qualification_raw,
+    doctor_raw,
+) = sys.argv[1:]
+
+def read_json(path):
+    if not path:
+        return None
+    try:
+        return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+
+def parse_json(raw, schema):
+    if raw:
+        try:
+            value = json.loads(raw)
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError:
+            pass
+    return {"schema": schema, "status": "not_run"}
+
+allowlist = read_json(allowlist_path) or {}
+try:
+    current_allowlist_sha256 = hashlib.sha256(pathlib.Path(allowlist_path).read_bytes()).hexdigest()
+except OSError:
+    current_allowlist_sha256 = None
+installation_raw = read_json(install_receipt_path)
+if not isinstance(installation_raw, dict) or installation_raw.get("schema") != "agent-flywheel.installation/v1":
+    installation = {
+        "schema": "agent-flywheel.installation/v1",
+        "status": "receipt_missing",
+    }
+else:
+    receipt_source = installation_raw.get("source", {})
+    receipt_bundle = installation_raw.get("bundle", {})
+    receipt_allowlist = installation_raw.get("allowlist", {})
+    receipt_modules = installation_raw.get("modules", {})
+    installation = {
+        "schema": "agent-flywheel.installation/v1",
+        "status": "recorded",
+        "claim": installation_raw.get("claim"),
+        "installed_at": installation_raw.get("installed_at"),
+        "source": {
+            "head": receipt_source.get("head"),
+            "tree": receipt_source.get("tree"),
+            "guest_root": receipt_source.get("guest_root"),
+        },
+        "bundle": {"sha256": receipt_bundle.get("sha256")},
+        "allowlist": {"sha256": receipt_allowlist.get("sha256")},
+        "modules": {
+            "approved": receipt_modules.get("approved"),
+            "licensing_held": receipt_modules.get("licensing_held"),
+        },
+    }
+
+approved = allowlist.get("allowed_resolved_modules", [])
+held = allowlist.get("held_exclusions", {})
+qualification = parse_json(qualification_raw, "agent-flywheel.qualification-host/v1")
+doctor = parse_json(doctor_raw, "agent-flywheel.partial-safe-doctor/v1")
+
+recorded_source = installation.get("source", {})
+source_exact = bool(
+    source_head
+    and source_tree
+    and recorded_source.get("head") == source_head
+    and recorded_source.get("tree") == source_tree
+)
+source_clean = source_clean_raw == "true"
+allowlist_exact = bool(
+    current_allowlist_sha256
+    and installation.get("allowlist", {}).get("sha256") == current_allowlist_sha256
+)
+installation["matches_current_allowlist"] = allowlist_exact
+
+rollout = {"status": "not_connected"}
+if rollout_receipt_path:
+    path = pathlib.Path(rollout_receipt_path)
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError("receipt root is not an object")
+        rollout = {
+            "status": "evidence_connected",
+            "receipt_sha256": hashlib.sha256(raw).hexdigest(),
+            "schema": value.get("schema"),
+            "declared_status": value.get("status"),
+            "scope": value.get("scope"),
+            "repository": value.get("repository"),
+            "bookclub_eligible": value.get("bookclub_eligible"),
+        }
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        rollout = {"status": "invalid", "error": str(error)}
+
+blockers = []
+if vm_status != "Running":
+    blockers.append({"scope": "lifecycle", "code": "vm_not_running", "next_command": "flywheel start"})
+if not source_root:
+    blockers.append({"scope": "lifecycle", "code": "source_unavailable", "next_command": "set FLYWHEEL_SOURCE_REPO, then run flywheel status"})
+elif not source_clean:
+    blockers.append({"scope": "lifecycle", "code": "source_dirty", "next_command": "preserve source changes, then run flywheel status"})
+if installation.get("status") != "recorded":
+    blockers.append({"scope": "lifecycle", "code": "installation_receipt_missing", "next_command": "flywheel mac install"})
+elif not source_exact:
+    blockers.append({"scope": "lifecycle", "code": "installed_source_drift", "next_command": "flywheel mac install"})
+elif not allowlist_exact:
+    blockers.append({"scope": "lifecycle", "code": "installed_allowlist_drift", "next_command": "flywheel mac install"})
+if vm_status == "Running" and qualification.get("status") != "pass":
+    blockers.append({"scope": "qualification", "code": "host_contract_failed", "next_command": "flywheel status --json"})
+if vm_status == "Running" and doctor.get("status") != "pass":
+    blockers.append({"scope": "doctor", "code": "doctor_failed", "next_command": "flywheel doctor --json"})
+if rollout.get("status") == "not_connected":
+    blockers.append({"scope": "repository_rollout", "code": "receipt_not_connected", "next_command": "flywheel status --json --rollout-receipt FILE"})
+elif rollout.get("status") == "invalid":
+    blockers.append({"scope": "repository_rollout", "code": "receipt_invalid", "next_command": "supply a valid JSON rollout receipt"})
+elif rollout.get("scope") != "live-repository-rollout":
+    blockers.append({"scope": "repository_rollout", "code": "live_rollout_not_proven", "next_command": "attach a passing live-repository-rollout receipt after explicit authorization"})
+elif rollout.get("declared_status") != "pass":
+    blockers.append({"scope": "repository_rollout", "code": "rollout_receipt_not_passing", "next_command": "repair the rollout evidence, then attach a passing receipt"})
+
+lifecycle_blocked = any(item["scope"] != "repository_rollout" for item in blockers)
+value = {
+    "schema": "agent-flywheel.status/v2",
+    "claim": "PARTIAL_SAFE",
+    "status": vm_status,
+    "readiness": "attention" if lifecycle_blocked else "ready",
+    "vm": {"name": vm_name, "status": vm_status, "healthy": vm_status == "Running"},
+    "source": {
+        "root": source_root or None,
+        "head": source_head or None,
+        "tree": source_tree or None,
+        "clean": source_clean,
+        "matches_installation": source_exact,
+    },
+    "installation": installation,
+    "modules": {
+        "approved": approved,
+        "approved_count": len(approved),
+        "licensing_held_count": held.get("count", 0),
+        "licensing_held_set_sha256": held.get("canonical_set_sha256"),
+        "pending_licensing_approvals": held.get("count", 0),
+    },
+    "qualification": qualification,
+    "doctor": doctor,
+    "repository_rollout": rollout,
+    "blockers": blockers,
+    "commands": {
+        "install": "flywheel mac install",
+        "start": "flywheel start",
+        "status": "flywheel status --json",
+        "doctor": "flywheel doctor --json",
+        "stop": "flywheel stop",
+    },
+}
+print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+PY
+)"
+    if ((JSON == 1)); then
+        printf '%s\n' "$status_json"
+    else
+        python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+print(f"Flywheel: {value[\"readiness\"]}")
+print(f"VM: {value[\"vm\"][\"name\"]} ({value[\"vm\"][\"status\"]})")
+print(f"Source: {value[\"source\"][\"head\"] or \"unavailable\"}")
+print(f"Modules: {value[\"modules\"][\"approved_count\"]} approved; {value[\"modules\"][\"pending_licensing_approvals\"]} licensing approvals pending")
+print(f"Qualification: {value[\"qualification\"].get(\"status\", \"not_run\")}")
+print(f"Doctor: {value[\"doctor\"].get(\"status\", \"not_run\")}")
+print(f"Repository rollout: {value[\"repository_rollout\"][\"status\"]}")
+for blocker in value["blockers"]:
+    print(f"Blocker [{blocker[\"scope\"]}]: {blocker[\"code\"]} -> {blocker[\"next_command\"]}")
+' "$status_json"
+    fi
+    python3 -c 'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1])["readiness"] == "ready" else 1)' "$status_json"
+}
+
+qualification_command() {
+    local head="$1"
+    local guest_root="/opt/agent-flywheel-acfs-$head"
+    "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
+        HOME=/home/ubuntu \
+        PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        FLYWHEEL_SOURCE_ROOT="$guest_root" \
+        bash -p "$guest_root/scripts/flywheel-qualification-host.sh" --json
 }
 
 doctor_command() {
+    local force_json="${1:-}"
     require_mac_tools
-    [[ "$(vm_status 2>/dev/null || true)" == "Running" ]] || die "Flywheel is stopped; run flywheel start"
+    [[ "$(vm_status 2>/dev/null || true)" == "Running" ]] \
+        || die 1 "Flywheel is stopped; run flywheel start, then flywheel doctor"
     local root=""
     local head=""
     local guest_root=""
@@ -211,7 +506,9 @@ doctor_command() {
     root="$(source_root)"
     head="$(git -C "$root" rev-parse HEAD)"
     guest_root="/opt/agent-flywheel-acfs-$head"
-    ((JSON == 1)) && doctor_args+=(--json)
+    if ((JSON == 1)) || [[ "$force_json" == "--json-internal" ]]; then
+        doctor_args+=(--json)
+    fi
     "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
         HOME=/home/ubuntu \
         PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -233,20 +530,100 @@ stop_command() {
     ok "Flywheel is stopped"
 }
 
+capabilities_command() {
+    ((JSON == 1)) \
+        || die 2 "capabilities is machine-readable; run flywheel capabilities --json"
+    local root=""
+    local version="unknown"
+    root="$(find_source_root 2>/dev/null || true)"
+    if [[ -n "$root" && -r "$root/VERSION" ]]; then
+        IFS= read -r version <"$root/VERSION"
+    fi
+    python3 - "$version" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "schema": "agent-flywheel.capabilities/v1",
+    "contract_version": 1,
+    "version": sys.argv[1],
+    "claim": "PARTIAL_SAFE",
+    "commands": [
+        {"command": "flywheel mac install", "kind": "mutation"},
+        {"command": "flywheel start", "kind": "mutation"},
+        {"command": "flywheel status --json", "kind": "read"},
+        {"command": "flywheel doctor --json", "kind": "read"},
+        {"command": "flywheel stop", "kind": "mutation"},
+        {"command": "flywheel capabilities --json", "kind": "read"},
+        {"command": "flywheel robot-docs guide", "kind": "read"},
+    ],
+    "feature_flags": {
+        "mac_ubuntu_vm": True,
+        "portable_qualification_host": True,
+        "repository_rollout_receipt": True,
+        "licensing_held_modules_executable": False,
+    },
+    "exit_codes": {
+        "0": "success",
+        "1": "unhealthy_status",
+        "2": "invalid_invocation_or_safety_refusal",
+        "3": "environment_unavailable",
+        "5": "operation_conflict",
+    },
+    "environment": {
+        "FLYWHEEL_SOURCE_REPO": "absolute ACFS source checkout",
+        "FLYWHEEL_VM_NAME": "Lima VM name",
+        "FLYWHEEL_ROLLOUT_RECEIPT": "optional repository rollout JSON receipt",
+    },
+}, sort_keys=True, separators=(",", ":")))
+PY
+}
+
+robot_docs_command() {
+    cat <<'GUIDE'
+Agent Flywheel operator guide
+
+1. Install or converge the eight-module PARTIAL_SAFE environment:
+   flywheel mac install
+2. Start the isolated Ubuntu VM:
+   flywheel start
+3. Read the complete machine status:
+   flywheel status --json
+4. Attach repository evidence without changing the repository:
+   flywheel status --json --rollout-receipt FILE
+5. Run the strict installed-module doctor:
+   flywheel doctor --json
+6. Stop the VM cleanly:
+   flywheel stop
+
+The status document reports exact source and bundle identities, current host
+qualification, installed and held modules, repository rollout evidence, and
+copy-pasteable remediation commands. PARTIAL_SAFE never authorizes any of the
+27 licensing-held modules.
+GUIDE
+}
+
 command_name="${1:-help}"
 shift || true
 subcommand=""
-if [[ "$command_name" == "mac" ]]; then
+if [[ "$command_name" == "mac" || "$command_name" == "robot-docs" ]]; then
     subcommand="${1:-}"
     shift || true
 fi
 while (($#)); do
     case "$1" in
         --json) JSON=1 ;;
+        --rollout-receipt)
+            (($# >= 2)) \
+                || die 2 "--rollout-receipt requires a file; run flywheel status --json --rollout-receipt FILE"
+            ROLLOUT_RECEIPT="$2"
+            shift
+            ;;
         --quiet) QUIET=1 ;;
         --no-gum) NO_GUM=1 ;;
         -h|--help) usage; exit 0 ;;
-        *) die "unknown option: $1" ;;
+        --jsno|--jason) die 2 "unknown option: $1; did you mean: flywheel $command_name --json" ;;
+        *) die 2 "unknown option: $1; run flywheel --help for the exact command" ;;
     esac
     shift
 done
@@ -257,7 +634,13 @@ case "$command_name:$subcommand" in
     status:) status_command ;;
     doctor:) doctor_command ;;
     stop:) stop_command ;;
+    capabilities:) capabilities_command ;;
+    robot-docs:guide) robot_docs_command ;;
     help:|--help:|-h:) usage ;;
-    mac:*) die "usage: flywheel mac install" ;;
-    *) die "unknown command: $command_name" ;;
+    mac:*) die 2 "unknown Mac action: ${subcommand:-missing}; run flywheel mac install" ;;
+    robot-docs:*) die 2 "unknown robot-docs topic: ${subcommand:-missing}; run flywheel robot-docs guide" ;;
+    statsu:|stats:|state:) die 2 "unknown command: $command_name; did you mean: flywheel status --json" ;;
+    docter:|doctro:) die 2 "unknown command: $command_name; did you mean: flywheel doctor --json" ;;
+    instal:|install:) die 2 "unknown command: $command_name; did you mean: flywheel mac install" ;;
+    *) die 2 "unknown command: $command_name; run flywheel --help for the exact command" ;;
 esac

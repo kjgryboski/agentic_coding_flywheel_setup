@@ -59,10 +59,15 @@ flywheel start
 flywheel status --json
 flywheel doctor --json
 flywheel stop
+flywheel capabilities --json
+flywheel robot-docs guide
 ```
 
 The current scope is `PARTIAL_SAFE`: eight approved modules are installed and
-27 licensing-held modules remain blocked before lifecycle activity.
+27 licensing-held modules remain blocked before lifecycle activity. The status
+document is the unified control surface: it reports VM and doctor health,
+qualification results, exact source/tree/bundle identities, installed and held
+module counts, current blockers, and an optional repository rollout receipt.
 
 > **Production environments:** For stable, reproducible installs, pin to a tagged release or specific commit:
 > ```bash
