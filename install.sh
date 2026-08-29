@@ -2521,6 +2521,9 @@ acfs_enforce_early_license_exclusion() {
             acfs_license_policy_module_is_held \
             acfs_license_policy_module_is_plain_mit_only \
             acfs_license_policy_admit_entry \
+            acfs_w2_partial_safe_requested \
+            acfs_w2_partial_safe_verify_allowlist \
+            acfs_w2_partial_safe_active \
             acfs_r1_runtime_profile_payload \
             _acfs_r1_sha256_file \
             _acfs_r1_profile_actual_sha256 \

@@ -81,7 +81,7 @@ acfs_require_contract() {
 # caller-supplied environment values cannot turn a HOLD or an out-of-plan
 # module into runtime authority.
 ACFS_R1_RUNTIME_PROFILE_ID="R1-held-module-exclusion-runtime-v1"
-ACFS_R1_RUNTIME_PROFILE_SHA256="c992dcf37870981ccb1b3f92b811f5c4f1f97f466bf9d261f45f3b3d4e558dbe"
+ACFS_R1_RUNTIME_PROFILE_SHA256="9f5fc5df38814e01008a7ba43744e6f808b12999b8e0e85370271e9b86ec87db"
 ACFS_R1_SOURCE_JSON_SHA256="33bca439667099cc56b98539aa825658a5f2f72f5d9dbd28d9212ab9cf3a427c"
 ACFS_R1_SOURCE_MD_SHA256="7141b4fa4c5362a44f7f0f61bdec7a7eef9b4bfbc6f8c3f408bb4ab8d18ca37b"
 ACFS_R1_U5V2_VERIFIER_SHA256="e70a27302ec46439f51797b4945ae54aae81ce9e4d49daa7bbc3e971cfc24445"
@@ -90,7 +90,7 @@ ACFS_R1_U5_BASE_TREE="8e1da65b3345a25fdac54eec3959932a70bab5fd"
 ACFS_R1_MANIFEST_SHA256="27f91a0f723a723145431ae5b303a8b127890dde26ab8b0de8b11b8a5de2ba06"
 ACFS_R1_GENERATOR_SHA256="d5da9de4185fa4e399357393686944ccdee1a1d8bcb0793053b3cc9b9945edbb"
 ACFS_R1_MANIFEST_INDEX_SHA256="3f4935851a4b0e1d3e489d8c29c9c8e3e7d6b0ab55703d9c76ca6decf8e6bd34"
-ACFS_R1_INSTALL_SH_SHA256="269ca48b62b1686dba634c67efe99e7d2f51b702537e0975365d699cb8ed048a"
+ACFS_R1_INSTALL_SH_SHA256="17d314114fbf1d56403aa6076dd12261b2baac1da8df5c51c8fbdb5bd941e656"
 ACFS_R1_SECURITY_SHA256="047fae70c75de78e903654f7a59e94f7ef510c26d4dbf0face1ade7696cd89be"
 ACFS_R1_CHECKSUMS_SHA256="36bbd2eba33e6ef70871f8c321623ba6d0b46720569c23b7ea5f1e91c9d0e83c"
 ACFS_R1_INSTALL_HELPERS_SHA256="a38c4e9ebad6ea476dfaf59d17860ada38356f7f6751cd84348875f49e99cc94"
@@ -131,6 +131,67 @@ ACFS_LICENSE_HELD_CSV="stack.beads_rust,stack.agent_settings_backup,stack.caam,s
 ACFS_LICENSE_PLAIN_MIT_ONLY_CSV="stack.power_failure_resumer"
 ACFS_LICENSE_R1_PLAN_HELD_CSV="stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer"
 ACFS_LICENSE_POLICY_REASON=""
+
+# W2 adds a separate, explicit commissioning authority without changing the
+# U6/R1 default HOLD.  The caller must name the exact immutable allowlist file;
+# no Boolean flag, environment-only assertion, or inferred license status can
+# activate this path.
+ACFS_W2_PARTIAL_SAFE_ALLOWLIST_SHA256="75897c7654e5a24a2a62dcdb00b8bd3b619055df1450e2893a0464c62ad54f1a"
+ACFS_W2_PARTIAL_SAFE_SEED_CSV="users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go"
+ACFS_W2_PARTIAL_SAFE_PLAN_CSV="base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go"
+ACFS_W2_PARTIAL_SAFE_POLICY_REASON=""
+
+acfs_w2_partial_safe_requested() {
+    [[ -n "${ACFS_PARTIAL_SAFE_ALLOWLIST_FILE:-}" ]]
+}
+
+acfs_w2_partial_safe_verify_allowlist() {
+    local allowlist="${ACFS_PARTIAL_SAFE_ALLOWLIST_FILE:-}"
+    local canonical=""
+    local actual_sha256=""
+    local mode=""
+    local links=""
+    local owner=""
+
+    ACFS_W2_PARTIAL_SAFE_POLICY_REASON=""
+    if [[ -z "$allowlist" || "$allowlist" != /* || ! -f "$allowlist" || -L "$allowlist" ]]; then
+        ACFS_W2_PARTIAL_SAFE_POLICY_REASON="W2 PARTIAL_SAFE allowlist is missing, non-absolute, nonregular, or a symlink"
+        return 1
+    fi
+    canonical="$(cd "$(dirname "$allowlist")" 2>/dev/null && printf '%s/%s\n' "$PWD" "$(basename "$allowlist")")"
+    if [[ -z "$canonical" || "$canonical" != "$allowlist" ]]; then
+        ACFS_W2_PARTIAL_SAFE_POLICY_REASON="W2 PARTIAL_SAFE allowlist path is not canonical"
+        return 1
+    fi
+    if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
+        mode="$(/usr/bin/stat -f '%Lp' "$allowlist" 2>/dev/null || true)"
+        links="$(/usr/bin/stat -f '%l' "$allowlist" 2>/dev/null || true)"
+        owner="$(/usr/bin/stat -f '%u' "$allowlist" 2>/dev/null || true)"
+    else
+        mode="$(/usr/bin/stat -c '%a' "$allowlist" 2>/dev/null || true)"
+        links="$(/usr/bin/stat -c '%h' "$allowlist" 2>/dev/null || true)"
+        owner="$(/usr/bin/stat -c '%u' "$allowlist" 2>/dev/null || true)"
+    fi
+    if [[ ! "$mode" =~ ^[0-7]{3,4}$ ]] || (( (8#$mode & 8#222) != 0 )); then
+        ACFS_W2_PARTIAL_SAFE_POLICY_REASON="W2 PARTIAL_SAFE allowlist must have no write bits"
+        return 1
+    fi
+    if [[ "$links" != "1" || "$owner" != "$EUID" ]]; then
+        ACFS_W2_PARTIAL_SAFE_POLICY_REASON="W2 PARTIAL_SAFE allowlist must be single-link and owned by the commissioning identity"
+        return 1
+    fi
+    actual_sha256="$(_acfs_r1_sha256_file "$allowlist" 2>/dev/null || true)"
+    if [[ "$actual_sha256" != "$ACFS_W2_PARTIAL_SAFE_ALLOWLIST_SHA256" ]]; then
+        ACFS_W2_PARTIAL_SAFE_POLICY_REASON="W2 PARTIAL_SAFE allowlist digest mismatch"
+        return 1
+    fi
+    return 0
+}
+
+acfs_w2_partial_safe_active() {
+    acfs_w2_partial_safe_requested || return 1
+    acfs_w2_partial_safe_verify_allowlist
+}
 
 acfs_license_exclusion_profile_payload() {
     /bin/cat <<'ACFS_LICENSE_EXCLUSION_PROFILE'
@@ -188,7 +249,7 @@ u5_base_tree=8e1da65b3345a25fdac54eec3959932a70bab5fd
 manifest_sha256=27f91a0f723a723145431ae5b303a8b127890dde26ab8b0de8b11b8a5de2ba06
 generator_sha256=d5da9de4185fa4e399357393686944ccdee1a1d8bcb0793053b3cc9b9945edbb
 manifest_index_sha256=3f4935851a4b0e1d3e489d8c29c9c8e3e7d6b0ab55703d9c76ca6decf8e6bd34
-install_sh_sha256=269ca48b62b1686dba634c67efe99e7d2f51b702537e0975365d699cb8ed048a
+install_sh_sha256=17d314114fbf1d56403aa6076dd12261b2baac1da8df5c51c8fbdb5bd941e656
 security_sha256=047fae70c75de78e903654f7a59e94f7ef510c26d4dbf0face1ade7696cd89be
 checksums_sha256=36bbd2eba33e6ef70871f8c321623ba6d0b46720569c23b7ea5f1e91c9d0e83c
 install_helpers_sha256=a38c4e9ebad6ea476dfaf59d17860ada38356f7f6751cd84348875f49e99cc94
@@ -343,6 +404,14 @@ acfs_license_policy_admit_entry() {
         return 0
     fi
 
+    if acfs_w2_partial_safe_requested; then
+        if acfs_w2_partial_safe_verify_allowlist; then
+            return 0
+        fi
+        ACFS_LICENSE_POLICY_REASON="${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-W2 PARTIAL_SAFE allowlist verification failed}"
+        return 1
+    fi
+
     ACFS_LICENSE_POLICY_REASON="LIC1+LIC2 HOLD rejects moduleless $entry before the R1 plan can inspect stack.mcp_agent_mail, stack.beads_rust, or stack.beads_viewer; express written permission is absent"
     return 1
 }
@@ -380,7 +449,7 @@ acfs_r1_runtime_verify_profile() {
         return 1
     fi
     if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" \
-        || "${ACFS_R1_RUNTIME_PROFILE_SHA256:-}" != "c992dcf37870981ccb1b3f92b811f5c4f1f97f466bf9d261f45f3b3d4e558dbe" \
+        || "${ACFS_R1_RUNTIME_PROFILE_SHA256:-}" != "9f5fc5df38814e01008a7ba43744e6f808b12999b8e0e85370271e9b86ec87db" \
         || "${ACFS_R1_SOURCE_JSON_SHA256:-}" != "33bca439667099cc56b98539aa825658a5f2f72f5d9dbd28d9212ab9cf3a427c" \
         || "${ACFS_R1_SOURCE_MD_SHA256:-}" != "7141b4fa4c5362a44f7f0f61bdec7a7eef9b4bfbc6f8c3f408bb4ab8d18ca37b" \
         || "${ACFS_R1_U5V2_VERIFIER_SHA256:-}" != "e70a27302ec46439f51797b4945ae54aae81ce9e4d49daa7bbc3e971cfc24445" \
@@ -389,7 +458,7 @@ acfs_r1_runtime_verify_profile() {
         || "${ACFS_R1_MANIFEST_SHA256:-}" != "27f91a0f723a723145431ae5b303a8b127890dde26ab8b0de8b11b8a5de2ba06" \
         || "${ACFS_R1_GENERATOR_SHA256:-}" != "d5da9de4185fa4e399357393686944ccdee1a1d8bcb0793053b3cc9b9945edbb" \
         || "${ACFS_R1_MANIFEST_INDEX_SHA256:-}" != "3f4935851a4b0e1d3e489d8c29c9c8e3e7d6b0ab55703d9c76ca6decf8e6bd34" \
-        || "${ACFS_R1_INSTALL_SH_SHA256:-}" != "269ca48b62b1686dba634c67efe99e7d2f51b702537e0975365d699cb8ed048a" \
+        || "${ACFS_R1_INSTALL_SH_SHA256:-}" != "17d314114fbf1d56403aa6076dd12261b2baac1da8df5c51c8fbdb5bd941e656" \
         || "${ACFS_R1_SECURITY_SHA256:-}" != "047fae70c75de78e903654f7a59e94f7ef510c26d4dbf0face1ade7696cd89be" \
         || "${ACFS_R1_CHECKSUMS_SHA256:-}" != "36bbd2eba33e6ef70871f8c321623ba6d0b46720569c23b7ea5f1e91c9d0e83c" \
         || "${ACFS_R1_INSTALL_HELPERS_SHA256:-}" != "a38c4e9ebad6ea476dfaf59d17860ada38356f7f6751cd84348875f49e99cc94" \
@@ -464,8 +533,13 @@ acfs_r1_runtime_module_is_held() {
 
 acfs_r1_runtime_module_is_planned() {
     local module_id="${1:-}"
+    local plan_csv="$ACFS_R1_PLAN_CSV"
     [[ -n "$module_id" ]] || return 1
-    case ",$ACFS_R1_PLAN_CSV," in
+    if acfs_w2_partial_safe_requested; then
+        acfs_w2_partial_safe_verify_allowlist || return 1
+        plan_csv="$ACFS_W2_PARTIAL_SAFE_PLAN_CSV"
+    fi
+    case ",$plan_csv," in
         *",$module_id,"*) return 0 ;;
         *) return 1 ;;
     esac
@@ -571,7 +645,7 @@ acfs_r1_runtime_prepare_selection() {
         || [[ "${NO_DEPS:-false}" == "true" ]] \
         || [[ -n "${ACFS_CLI_PROFILE:-}" ]] \
         || [[ -n "${ACFS_SELECTED_PROFILE:-}" ]]; then
-        ACFS_R1_POLICY_REASON="R1 requires the exact six --only seeds with dependency closure and no profile, phase, or skip selectors"
+        ACFS_R1_POLICY_REASON="R1/W2 requires the exact ordered --only seeds with dependency closure and no profile, phase, or skip selectors"
         return 1
     fi
 
@@ -589,7 +663,15 @@ acfs_r1_runtime_prepare_selection() {
     fi
 
     requested_csv="$(_acfs_r1_array_csv "${ONLY_MODULES[@]}")"
-    if [[ "$requested_csv" != "$ACFS_R1_SEED_CSV" ]]; then
+    local expected_seed_csv="$ACFS_R1_SEED_CSV"
+    if acfs_w2_partial_safe_requested; then
+        if ! acfs_w2_partial_safe_verify_allowlist; then
+            ACFS_R1_POLICY_REASON="${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-W2 PARTIAL_SAFE allowlist verification failed}"
+            return 1
+        fi
+        expected_seed_csv="$ACFS_W2_PARTIAL_SAFE_SEED_CSV"
+    fi
+    if [[ "$requested_csv" != "$expected_seed_csv" ]]; then
         ACFS_R1_POLICY_REASON="R1 explicit seed sequence mismatch"
         return 1
     fi
@@ -623,6 +705,7 @@ acfs_r1_runtime_prepare_selection() {
 
 acfs_r1_runtime_validate_plan() {
     local resolved_csv=""
+    local expected_plan_csv="$ACFS_R1_PLAN_CSV"
     local module_id=""
     local expected_phase=""
     local expected_deps=""
@@ -634,8 +717,15 @@ acfs_r1_runtime_validate_plan() {
         return 1
     fi
 
+    if acfs_w2_partial_safe_requested; then
+        if ! acfs_w2_partial_safe_verify_allowlist; then
+            ACFS_R1_POLICY_REASON="${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-W2 PARTIAL_SAFE allowlist verification failed}"
+            return 1
+        fi
+        expected_plan_csv="$ACFS_W2_PARTIAL_SAFE_PLAN_CSV"
+    fi
     resolved_csv="$(_acfs_r1_array_csv "${ACFS_EFFECTIVE_PLAN[@]}")"
-    if [[ "$resolved_csv" != "$ACFS_R1_PLAN_CSV" ]]; then
+    if [[ "$resolved_csv" != "$expected_plan_csv" ]]; then
         ACFS_R1_POLICY_REASON="R1 resolved module order mismatch"
         return 1
     fi
@@ -647,10 +737,14 @@ acfs_r1_runtime_validate_plan() {
         fi
     done
 
-    for module_id in \
-        base.system users.ubuntu base.filesystem cli.modern \
-        lang.bun lang.uv lang.rust lang.go \
-        stack.mcp_agent_mail stack.beads_rust stack.beads_viewer; do
+    local -a expected_modules=(
+        base.system users.ubuntu base.filesystem cli.modern
+        lang.bun lang.uv lang.rust lang.go
+    )
+    if ! acfs_w2_partial_safe_requested; then
+        expected_modules+=(stack.mcp_agent_mail stack.beads_rust stack.beads_viewer)
+    fi
+    for module_id in "${expected_modules[@]}"; do
         case "$module_id" in
             base.system) expected_phase="1"; expected_deps="" ;;
             users.ubuntu) expected_phase="2"; expected_deps="" ;;
