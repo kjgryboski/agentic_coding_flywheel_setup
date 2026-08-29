@@ -628,6 +628,15 @@ acfs_r1_runtime_prepare_selection() {
     local entry="filtered"
     local dispatch_var=""
     local dispatch_value=""
+    local skip_tags_count=0
+    local skip_categories_count=0
+
+    if builtin declare -p SKIP_TAGS >/dev/null 2>&1; then
+        skip_tags_count=${#SKIP_TAGS[@]}
+    fi
+    if builtin declare -p SKIP_CATEGORIES >/dev/null 2>&1; then
+        skip_categories_count=${#SKIP_CATEGORIES[@]}
+    fi
 
     # A direct profile/selection helper call is itself a moduleless lifecycle
     # boundary.  Reject it before reading caller arrays, profile markers, the
@@ -638,8 +647,8 @@ acfs_r1_runtime_prepare_selection() {
     if [[ ${#ONLY_MODULES[@]} -eq 0 ]] \
         && [[ ${#ONLY_PHASES[@]} -eq 0 ]] \
         && [[ ${#SKIP_MODULES[@]} -eq 0 ]] \
-        && [[ ${#SKIP_TAGS[@]} -eq 0 ]] \
-        && [[ ${#SKIP_CATEGORIES[@]} -eq 0 ]] \
+        && [[ $skip_tags_count -eq 0 ]] \
+        && [[ $skip_categories_count -eq 0 ]] \
         && [[ -z "${ACFS_CLI_PROFILE:-}" ]] \
         && [[ -z "${ACFS_SELECTED_PROFILE:-}" ]]; then
         entry="default"
@@ -652,8 +661,8 @@ acfs_r1_runtime_prepare_selection() {
 
     if [[ ${#ONLY_PHASES[@]} -ne 0 ]] \
         || [[ ${#SKIP_MODULES[@]} -ne 0 ]] \
-        || [[ ${#SKIP_TAGS[@]} -ne 0 ]] \
-        || [[ ${#SKIP_CATEGORIES[@]} -ne 0 ]] \
+        || [[ $skip_tags_count -ne 0 ]] \
+        || [[ $skip_categories_count -ne 0 ]] \
         || [[ "${NO_DEPS:-false}" == "true" ]] \
         || [[ -n "${ACFS_CLI_PROFILE:-}" ]] \
         || [[ -n "${ACFS_SELECTED_PROFILE:-}" ]]; then

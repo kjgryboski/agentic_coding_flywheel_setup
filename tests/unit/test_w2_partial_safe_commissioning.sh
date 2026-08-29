@@ -46,8 +46,7 @@ fi
 ONLY_MODULES=(users.ubuntu base.filesystem cli.modern lang.bun lang.uv lang.rust lang.go)
 ONLY_PHASES=()
 SKIP_MODULES=()
-SKIP_TAGS=()
-SKIP_CATEGORIES=()
+unset SKIP_TAGS SKIP_CATEGORIES
 NO_DEPS=false
 ACFS_CLI_PROFILE=""
 ACFS_SELECTED_PROFILE=""
