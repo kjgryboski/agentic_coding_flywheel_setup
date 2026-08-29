@@ -5532,7 +5532,7 @@ acfs_parse_checksums_content() {
 
 acfs_required_upstream_tools() {
     printf '%s\n' \
-        antigravity atuin bun bv caam cass claude cm dcg gemini_patch mcp_agent_mail ntm ohmyzsh ru rust slb ubs uv zoxide
+        antigravity atuin br bun caam cass claude cm dcg gemini_patch mcp_agent_mail ntm ohmyzsh ru rust slb ubs uv zoxide
 }
 
 acfs_validate_upstream_checksums() {
@@ -5645,6 +5645,23 @@ acfs_run_verified_upstream_script_as_target_with_env() {
     fi
 
     acfs_load_upstream_checksums || return $?
+
+    case "$tool" in
+        mcp_agent_mail|br|bv)
+            local core_module=""
+            case "$tool" in
+                mcp_agent_mail) core_module="stack.mcp_agent_mail" ;;
+                br) core_module="stack.beads_rust" ;;
+                bv) core_module="stack.beads_viewer" ;;
+            esac
+            if ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
+                || ! acfs_core_policy_enforce_installer_execution \
+                    "$core_module" install "${TARGET_HOME:-}" "$@"; then
+                log_error "${ACFS_CORE_POLICY_REASON:-core installer execution policy unavailable for $tool}"
+                return 1
+            fi
+            ;;
+    esac
 
     local url="${ACFS_UPSTREAM_URLS[$tool]:-}"
     local expected_sha256="${ACFS_UPSTREAM_SHA256[$tool]:-}"
@@ -9346,7 +9363,12 @@ NTM_CONFIG_EOF
     fi
 
     # MCP Agent Mail
-    if [[ -f "${ACFS_LIB_DIR:-}/stack.sh" ]]; then
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce "stack.mcp_agent_mail" install ""; then
+        log_error "${ACFS_CORE_POLICY_REASON:-MCP Agent Mail core admission policy unavailable}"
+        ACFS_MODULE_FAILURES+=("stack.mcp_agent_mail (commissioning hold)")
+        stack_phase_rc=1
+    elif [[ -f "${ACFS_LIB_DIR:-}/stack.sh" ]]; then
         # shellcheck source=scripts/lib/stack.sh
         source "$ACFS_LIB_DIR/stack.sh"
         # Agent Mail failing (port 8765 held, slow readiness, no user
@@ -9846,18 +9868,48 @@ UNIT_EOF
     fi
 
     # Beads Rust
-    if binary_installed "br"; then
-        log_detail "Beads Rust already installed"
+    if ! acfs_load_upstream_checksums \
+        || ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce "stack.beads_rust" install \
+            "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"; then
+        log_error "${ACFS_CORE_POLICY_REASON:-Beads Rust core admission policy unavailable}"
+        ACFS_MODULE_FAILURES+=("stack.beads_rust (core admission)")
+        stack_phase_rc=1
+    elif _smoke_run_as_target "br --version 2>/dev/null | grep -Eq '(^|[[:space:]])v?0[.]5[.]3([[:space:]]|$)'"; then
+        log_detail "Beads Rust v0.5.3 already installed"
     else
         log_detail "Installing Beads Rust"
-        try_step "Installing Beads Rust" acfs_run_verified_upstream_script_as_target "br" "bash" || log_warn "Beads Rust installation may have failed"
+        try_step "Installing Beads Rust" acfs_run_verified_upstream_script_as_target "br" "bash" \
+            --version v0.5.3 \
+            --dest "$TARGET_HOME/.local/bin" \
+            --artifact-url "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz" \
+            --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb" \
+            || {
+                log_warn "Beads Rust installation may have failed"
+                ACFS_MODULE_FAILURES+=("stack.beads_rust (installer execution)")
+                stack_phase_rc=1
+            }
     fi
 
-    # Beads Viewer is deliberately unavailable through the legacy stack path.
-    # Its upstream installer resolves a mutable latest release, so the only
-    # admitted path is the manifest-generated content-addressed v0.22.0 module.
-    log_error "Beads Viewer requires generated module stack.beads_viewer; refusing the legacy installer path"
-    return 1
+    # The legacy phase delegates bv to the same generated, content-addressed
+    # implementation used by filtered/default generated installs.  Never call
+    # the upstream mutable installer from this path.
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce "stack.beads_viewer" install \
+            "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv"; then
+        log_error "${ACFS_CORE_POLICY_REASON:-Beads Viewer core admission policy unavailable}"
+        ACFS_MODULE_FAILURES+=("stack.beads_viewer (core admission)")
+        stack_phase_rc=1
+    elif declare -f acfs_generated_install_stack_beads_viewer >/dev/null 2>&1; then
+        acfs_generated_install_stack_beads_viewer || {
+            ACFS_MODULE_FAILURES+=("stack.beads_viewer (installer execution)")
+            stack_phase_rc=1
+        }
+    else
+        log_error "Beads Viewer generated content-addressed installer is unavailable"
+        ACFS_MODULE_FAILURES+=("stack.beads_viewer (generated installer unavailable)")
+        stack_phase_rc=1
+    fi
 
     # CASS (Coding Agent Session Search)
     if binary_installed "cass"; then
@@ -10846,7 +10898,7 @@ run_smoke_test() {
         echo "✅ Agent Mail: running on http://127.0.0.1:8765" >&2
     elif [[ -x "$TARGET_HOME/.local/bin/am" ]] || [[ -x "$TARGET_HOME/mcp_agent_mail/scripts/run_server_with_token.sh" ]]; then
         echo "⚠️ Agent Mail: installed but service is not running" >&2
-        echo "    Fix: rerun ACFS update/install to rewrite agent-mail.service, then systemctl --user enable --now agent-mail.service" >&2
+        echo "    Fix: inspect the commissioning HOLD with 'acfs doctor'; service changes must use 'acfs services start'" >&2
         ((warnings += 1))
     else
         echo "⚠️ Agent Mail: not installed (re-run: $(acfs_smoke_install_fix_command stack.mcp_agent_mail))" >&2

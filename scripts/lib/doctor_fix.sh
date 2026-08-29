@@ -1012,6 +1012,25 @@ doctor_fix_run_verified_installer_with_env() {
         return 1
     fi
 
+    case "$tool" in
+        mcp_agent_mail|br|bv)
+            local core_module=""
+            local core_target_home=""
+            case "$tool" in
+                mcp_agent_mail) core_module="stack.mcp_agent_mail" ;;
+                br) core_module="stack.beads_rust" ;;
+                bv) core_module="stack.beads_viewer" ;;
+            esac
+            core_target_home="$(doctor_fix_runtime_home 2>/dev/null || true)"
+            if ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
+                || ! acfs_core_policy_enforce_installer_execution \
+                    "$core_module" doctor "$core_target_home" "$@"; then
+                doctor_fix_log WARN "${ACFS_CORE_POLICY_REASON:-core installer execution policy unavailable for $tool}"
+                return 1
+            fi
+            ;;
+    esac
+
     local url="${KNOWN_INSTALLERS[$tool]:-}"
     local expected_sha256=""
     expected_sha256="$(get_checksum "$tool")"
@@ -1689,10 +1708,32 @@ dispatch_fix() {
             fix_verified_install "$check_id" "ubs" "ubs" --easy-mode
             ;;
         stack.beads_viewer|stack.bv)
-            fix_verified_install "$check_id" "bv" "bv"
+            if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+                || ! acfs_core_policy_enforce "stack.beads_viewer" doctor \
+                    "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv"; then
+                doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-Beads Viewer core admission policy unavailable}"
+            else
+                doctor_fix_log ERROR "Beads Viewer repair requires the content-addressed generated route: install.sh --only stack.beads_viewer"
+            fi
+            FIXES_MANUAL+=("$check_id|Use the content-addressed generated Beads Viewer installer|install.sh --only stack.beads_viewer")
+            FIX_MANUAL=$((FIX_MANUAL + 1))
+            FIX_FAILED=$((FIX_FAILED + 1))
+            return 1
             ;;
         stack.beads_rust|stack.beads_rust.*)
-            fix_verified_install "$check_id" "br" "br"
+            if ! doctor_fix_require_security \
+                || ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+                || ! acfs_core_policy_enforce "stack.beads_rust" doctor \
+                    "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"; then
+                doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-Beads Rust core admission policy unavailable}"
+                FIX_FAILED=$((FIX_FAILED + 1))
+                return 1
+            fi
+            fix_verified_install "$check_id" "br" "br" \
+                --version v0.5.3 \
+                --dest "$(doctor_fix_runtime_home)/.local/bin" \
+                --artifact-url "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz" \
+                --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"
             ;;
         stack.cass)
             fix_verified_install_with_target_tmpdir "$check_id" "cass" "cass" --easy-mode --verify
@@ -1734,6 +1775,12 @@ dispatch_fix() {
             fix_symlink_create "$check_id" "$(doctor_fix_runtime_home)/.cargo/bin/bv" "$(doctor_fix_runtime_home)/.local/bin/bv"
             ;;
         symlink.am)
+            if ! doctor_fix_require_agent_mail_admission; then
+                FIXES_MANUAL+=("$check_id|Agent Mail remains on commissioning HOLD; the CLI symlink was not changed|Do not accept a published/legacy Agent Mail binary")
+                FIX_MANUAL=$((FIX_MANUAL + 1))
+                FIX_FAILED=$((FIX_FAILED + 1))
+                return 1
+            fi
             fix_symlink_create "$check_id" "$(doctor_fix_runtime_home)/mcp_agent_mail/am" "$(doctor_fix_runtime_home)/.local/bin/am"
             ;;
 
@@ -2271,6 +2318,16 @@ fix_ssh_keepalive() {
 # Fixer: MCP Agent Mail (fix.stack.mcp_agent_mail)
 # ============================================================
 
+doctor_fix_require_agent_mail_admission() {
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce "stack.mcp_agent_mail" doctor ""; then
+        doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-MCP Agent Mail core admission policy unavailable}"
+        return 1
+    fi
+
+    return 0
+}
+
 doctor_fix_agent_mail_cli_path() {
     local runtime_home=""
     local primary_bin=""
@@ -2438,6 +2495,8 @@ agent_mail_fix_readiness_ready() {
 }
 
 agent_mail_fix_write_unit() {
+    doctor_fix_require_agent_mail_admission || return 1
+
     local runtime_home=""
     runtime_home="$(doctor_fix_runtime_home)"
     local storage_root="$runtime_home/.mcp_agent_mail_git_mailbox_repo"
@@ -2493,6 +2552,8 @@ UNIT_EOF
 }
 
 agent_mail_fix_launch_fallback() {
+    doctor_fix_require_agent_mail_admission || return 1
+
     local storage_root="$(doctor_fix_runtime_home)/.mcp_agent_mail_git_mailbox_repo"
     local fallback_pid_file="$storage_root/agent-mail.pid"
     local fallback_log_file="$storage_root/agent-mail.log"
@@ -2537,6 +2598,8 @@ agent_mail_fix_launch_fallback() {
 }
 
 agent_mail_fix_stop_fallback() {
+    doctor_fix_require_agent_mail_admission || return 1
+
     local storage_root="$(doctor_fix_runtime_home)/.mcp_agent_mail_git_mailbox_repo"
     local fallback_pid_file="$storage_root/agent-mail.pid"
     local am_bin=""
@@ -2640,6 +2703,18 @@ fix_mcp_agent_mail() {
     local am_dst=""
     local storage_root=""
     local unit_file=""
+
+    # The doctor fixer is itself an Agent Mail mutation entry point.  Keep it
+    # behind the same commissioning policy as install, update, and diagnosis;
+    # the held candidate must not repair a symlink, database, or service from
+    # a legacy/published binary.
+    if ! doctor_fix_require_agent_mail_admission; then
+        FIXES_MANUAL+=("$check_id|Agent Mail remains on commissioning HOLD; no automated mutation is admitted|Do not install, repair, restart, or accept a published/legacy Agent Mail binary or service")
+        FIX_MANUAL=$((FIX_MANUAL + 1))
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+
     runtime_home="$(doctor_fix_runtime_home)"
     runtime_user="$(doctor_fix_runtime_user)"
     am_src="$runtime_home/mcp_agent_mail/am"

@@ -852,6 +852,74 @@ check_checksum_candidate_file() {
     fi
 }
 
+dns_ipv4_address_valid() {
+    local address="${1:-}"
+    local octet=""
+    local -a octets=()
+
+    [[ "$address" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS=. read -r -a octets <<< "$address"
+    [[ ${#octets[@]} -eq 4 ]] || return 1
+
+    for octet in "${octets[@]}"; do
+        [[ "$octet" =~ ^[0-9]{1,3}$ ]] || return 1
+        (( 10#$octet <= 255 )) || return 1
+    done
+
+    return 0
+}
+
+dns_ipv6_address_valid() {
+    local token="${1:-}"
+    local address="$token"
+    local zone=""
+    local left=""
+    local right=""
+    local side=""
+    local group=""
+    local group_count=0
+    local compressed=false
+    local -a groups=()
+
+    if [[ "$address" == *%* ]]; then
+        zone="${address#*%}"
+        address="${address%%\%*}"
+        [[ -n "$zone" && "$zone" != *%* ]] || return 1
+        [[ "$zone" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+    fi
+
+    [[ "$address" == *:* && "$address" != ":" ]] || return 1
+    [[ "$address" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+    [[ "$address" != *:::* ]] || return 1
+
+    if [[ "$address" == *::* ]]; then
+        compressed=true
+        left="${address%%::*}"
+        right="${address#*::}"
+        [[ "$right" != *::* ]] || return 1
+    else
+        left="$address"
+        right=""
+    fi
+
+    for side in "$left" "$right"; do
+        [[ -n "$side" ]] || continue
+        [[ "$side" != :* && "$side" != *: ]] || return 1
+        groups=()
+        IFS=: read -r -a groups <<< "$side"
+        for group in "${groups[@]}"; do
+            [[ "$group" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+            ((group_count += 1))
+        done
+    done
+
+    if [[ "$compressed" == "true" ]]; then
+        (( group_count < 8 ))
+    else
+        (( group_count == 8 ))
+    fi
+}
+
 dns_output_has_address() {
     local output="${1:-}"
     local token=""
@@ -860,11 +928,7 @@ dns_output_has_address() {
     # Accept only address-shaped fields so an empty/NXDOMAIN answer cannot pass
     # merely because the resolver command itself exited successfully.
     for token in $output; do
-        if [[ "$token" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-            return 0
-        fi
-        if [[ "$token" == *:* ]] \
-            && [[ "$token" =~ ^[0-9A-Fa-f:]+(%[A-Za-z0-9_.-]+)?$ ]]; then
+        if dns_ipv4_address_valid "$token" || dns_ipv6_address_valid "$token"; then
             return 0
         fi
     done

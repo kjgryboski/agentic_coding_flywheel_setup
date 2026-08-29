@@ -78,6 +78,12 @@ setup_test_env() {
     # shellcheck source=../../scripts/lib/doctor_fix.sh
     source "$REPO_ROOT/scripts/lib/doctor_fix.sh"
 
+    # Most Agent Mail fixer cases below exercise post-admission repair
+    # mechanics in isolation.  The dedicated commissioning-HOLD case replaces
+    # this test double with the real fail-closed result and proves that none of
+    # those mechanics are reachable in the held candidate.
+    acfs_core_policy_enforce() { return 0; }
+
     # Autofix state
     export ACFS_STATE_DIR="/tmp/test_doctor_fix_${test_id}"
     export ACFS_CHANGES_FILE="$ACFS_STATE_DIR/changes.jsonl"
@@ -3505,6 +3511,40 @@ EOF
     return 0
 }
 
+test_fix_mcp_agent_mail_commissioning_hold_prevents_mutation() (
+    setup_test_env
+
+    local mutation_marker="$ACFS_STATE_DIR/agent-mail-mutation-attempted"
+    acfs_core_policy_enforce() {
+        ACFS_CORE_POLICY_REASON="C4 commissioning HOLD: strict Agent Mail admission is unavailable"
+        return 1
+    }
+    doctor_fix_source_stack_lib() { : > "$mutation_marker"; return 0; }
+    doctor_fix_run_verified_installer_with_env() { : > "$mutation_marker"; return 0; }
+    _stack_repair_agent_mail_cli_symlink() { : > "$mutation_marker"; return 0; }
+    _stack_configure_agent_mail_service() { : > "$mutation_marker"; return 0; }
+
+    if fix_mcp_agent_mail "fix.stack.mcp_agent_mail" >/dev/null 2>&1; then
+        echo "  fix_mcp_agent_mail accepted a held Agent Mail candidate"
+        cleanup_test_env
+        return 1
+    fi
+    if [[ -e "$mutation_marker" ]]; then
+        echo "  Agent Mail mutation helper ran before commissioning admission"
+        cleanup_test_env
+        return 1
+    fi
+    if [[ "$FIX_FAILED" -ne 1 ]] \
+        || ! printf '%s\n' "${FIXES_MANUAL[@]}" | grep -Fq 'Agent Mail remains on commissioning HOLD'; then
+        echo "  Agent Mail HOLD was not recorded as a failed manual remediation"
+        cleanup_test_env
+        return 1
+    fi
+
+    cleanup_test_env
+    return 0
+)
+
 test_fix_mcp_agent_mail_stops_after_failed_database_repair() (
     setup_test_env
 
@@ -4532,6 +4572,7 @@ main() {
     run_test test_agent_mail_fix_stop_fallback_leaves_systemd_main_pid_to_supervisor
     run_test test_agent_mail_fix_stop_fallback_refuses_hard_kill
     run_test test_agent_mail_fix_safe_to_mutate_requires_drain_attestation
+    run_test test_fix_mcp_agent_mail_commissioning_hold_prevents_mutation
     run_test test_fix_mcp_agent_mail_stops_after_failed_database_repair
     run_test test_fix_mcp_agent_mail_does_not_mask_service_failure_with_healthy_process
     run_test test_fix_mcp_agent_mail_requires_fresh_health_after_service_restart

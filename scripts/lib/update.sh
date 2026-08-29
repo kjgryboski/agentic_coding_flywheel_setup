@@ -3614,7 +3614,7 @@ update_sync_known_installer_urls_from_checksums() {
 
 update_required_checksum_tools() {
     printf '%s\n' \
-        antigravity apr asb atuin br brenner_bot bun bv caam casr cass claude cm csctf dcg dsr \
+        antigravity apr asb atuin br brenner_bot bun caam casr cass claude cm csctf dcg dsr \
         ee fmd fsfs gemini_patch giil grok jfp mcp_agent_mail mdwb ms ntm nvm ohmyzsh omp opencode \
         pcr pfr pi pt rano rch ru rust s2p sbh slb srps tru ubs uv xf zoxide
 }
@@ -3896,6 +3896,18 @@ update_require_security() {
     fi
     # shellcheck disable=SC1090,SC1091  # runtime-resolved absolute path source
     source "$security_script"
+    local contract_script="${security_script%/*}/contract.sh"
+    if [[ ! -f "$contract_script" ]]; then
+        echo "Core admission contract library not found beside security policy: $contract_script" >&2
+        return 1
+    fi
+    # shellcheck disable=SC1090,SC1091  # paired with the selected security library
+    source "$contract_script"
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1; then
+        echo "Core admission policy is unavailable after loading: $contract_script" >&2
+        return 1
+    fi
     load_checksums || return 1
     update_sync_known_installer_urls_from_checksums "${CHECKSUMS_FILE:-}"
 
@@ -4305,6 +4317,25 @@ update_run_verified_installer_with_env() {
         echo "Security verification unavailable (missing $SCRIPT_DIR/security.sh, repo scripts/lib/security.sh, or checksums.yaml)" >&2
         return 1
     fi
+
+    case "$tool" in
+        mcp_agent_mail|br|bv)
+            local core_module=""
+            local core_target_home=""
+            case "$tool" in
+                mcp_agent_mail) core_module="stack.mcp_agent_mail" ;;
+                br) core_module="stack.beads_rust" ;;
+                bv) core_module="stack.beads_viewer" ;;
+            esac
+            core_target_home="$(update_target_home "$(update_target_user)" 2>/dev/null || true)"
+            if ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
+                || ! acfs_core_policy_enforce_installer_execution \
+                    "$core_module" update "$core_target_home" "$@"; then
+                echo "${ACFS_CORE_POLICY_REASON:-core installer execution policy unavailable for $tool}" >&2
+                return 1
+            fi
+            ;;
+    esac
 
     local url="${KNOWN_INSTALLERS[$tool]:-}"
     local expected_sha256
@@ -6236,8 +6267,14 @@ update_stack() {
         update_say "       ${DIM}%s → %s${NC}\n" "${VERSION_BEFORE[ntm]}" "${VERSION_AFTER[ntm]}"
     fi
 
-    # MCP Agent Mail - always install/update via non-blocking installer mode,
-    # then enable the managed user service on port 8765.
+    # Agent Mail cannot be updated or have its service refreshed until the
+    # exact-source/auth/state commissioning contract is admitted.  Keep the
+    # prior implementation behind the same canonical policy gate as install
+    # and doctor; the current candidate intentionally fails this gate.
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce "stack.mcp_agent_mail" update ""; then
+        log_item "fail" "MCP Agent Mail" "${ACFS_CORE_POLICY_REASON:-core admission policy unavailable}"
+    else
     local tool="mcp_agent_mail"
     local url="${KNOWN_INSTALLERS[$tool]:-}"
     local expected_sha256
@@ -6326,6 +6363,7 @@ update_stack() {
     else
         log_item "fail" "MCP Agent Mail" "unknown installer URL/checksum"
     fi
+    fi
 
     # Meta Skill (ms) - always install/update (installer is idempotent)
     update_run_verified_installer_or_existing_on_transient "Meta Skill" ms ms ms --easy-mode || true
@@ -6348,11 +6386,44 @@ update_stack() {
     # UBS - always install/update (installer is idempotent)
     run_cmd "Ultimate Bug Scanner" update_run_verified_installer ubs --easy-mode
 
-    # Beads Viewer - always install/update
-    run_cmd "Beads Viewer" update_run_verified_installer bv
+    # Beads Viewer is content-addressed by the generated installer.  The
+    # updater never invokes its mutable upstream installer; it preserves the
+    # admitted v0.22.0 binary and directs a missing/incorrect install through
+    # the filtered generated route.
+    if declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        && acfs_core_policy_enforce "stack.beads_viewer" update \
+            "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv"; then
+        local bv_bin=""
+        bv_bin="$(update_binary_path bv 2>/dev/null || true)"
+        if [[ -n "$bv_bin" ]] && "$bv_bin" --version 2>/dev/null | grep -Eq '(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)'; then
+            log_item "ok" "Beads Viewer" "immutable v0.22.0 already admitted"
+        else
+            log_item "fail" "Beads Viewer" "run the content-addressed ACFS route: install.sh --only stack.beads_viewer"
+        fi
+    else
+        log_item "fail" "Beads Viewer" "${ACFS_CORE_POLICY_REASON:-core admission policy unavailable}"
+    fi
 
-    # Beads Rust (br) - local issue tracker CLI - always install/update
-    run_cmd "Beads Rust" update_run_verified_installer br
+    # Beads Rust is refreshed only through its immutable installer commit and
+    # pinned v0.5.3 artifact contract.  Supplying no version (latest) is not an
+    # admitted update path.
+    if declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        && acfs_core_policy_enforce "stack.beads_rust" update \
+            "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"; then
+        local br_target_home=""
+        br_target_home="$(update_target_home "$(update_target_user)" 2>/dev/null || true)"
+        if [[ -n "$br_target_home" ]]; then
+            run_cmd "Beads Rust" update_run_verified_installer br \
+                --version v0.5.3 \
+                --dest "$br_target_home/.local/bin" \
+                --artifact-url "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz" \
+                --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"
+        else
+            log_item "fail" "Beads Rust" "unable to resolve target home"
+        fi
+    else
+        log_item "fail" "Beads Rust" "${ACFS_CORE_POLICY_REASON:-core admission policy unavailable}"
+    fi
 
     # CASS - always install/update. Its upstream installer uses a lock inside
     # TMPDIR; give it an ACFS-owned target-user temp root so stale shared

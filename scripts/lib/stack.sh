@@ -13,6 +13,13 @@ if [[ -z "${ACFS_BLUE:-}" ]]; then
     source "$STACK_SCRIPT_DIR/logging.sh"
 fi
 
+if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1; then
+    if [[ -f "$STACK_SCRIPT_DIR/contract.sh" ]]; then
+        # shellcheck source=contract.sh
+        source "$STACK_SCRIPT_DIR/contract.sh"
+    fi
+fi
+
 # ============================================================
 # Configuration
 # ============================================================
@@ -619,6 +626,8 @@ _stack_agent_mail_cli_path() {
 }
 
 _stack_repair_agent_mail_cli_symlink() {
+    _stack_enforce_core_policy "stack.mcp_agent_mail" install "" || return 1
+
     local target_home=""
     target_home="$(_stack_target_home "${TARGET_USER:-ubuntu}")"
 
@@ -763,6 +772,21 @@ _stack_require_security() {
     return 0
 }
 
+_stack_enforce_core_policy() {
+    local module_id="${1:-}"
+    local operation="${2:-}"
+    local supplied_contract="${3:-}"
+
+    if ! _stack_require_security \
+        || ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce "$module_id" "$operation" "$supplied_contract"; then
+        log_error "${ACFS_CORE_POLICY_REASON:-core admission policy unavailable for $module_id}"
+        return 1
+    fi
+
+    return 0
+}
+
 # Run an installer script as target user with checksum verification.
 # Some upstream installers use environment variables instead of CLI flags for
 # non-interactive mode, so allow newline-separated env assignments like VAR=value.
@@ -783,6 +807,25 @@ _stack_run_verified_installer_with_env() {
     if ! _stack_require_security; then
         return 1
     fi
+
+    case "$tool" in
+        mcp_agent_mail|br|bv)
+            local core_module=""
+            local core_target_home=""
+            case "$tool" in
+                mcp_agent_mail) core_module="stack.mcp_agent_mail" ;;
+                br) core_module="stack.beads_rust" ;;
+                bv) core_module="stack.beads_viewer" ;;
+            esac
+            core_target_home="$(_stack_target_home "${TARGET_USER:-ubuntu}" 2>/dev/null || true)"
+            if ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
+                || ! acfs_core_policy_enforce_installer_execution \
+                    "$core_module" install "$core_target_home" "$@"; then
+                log_warn "${ACFS_CORE_POLICY_REASON:-core installer execution policy unavailable for $tool}"
+                return 1
+            fi
+            ;;
+    esac
 
     local url="${KNOWN_INSTALLERS[$tool]:-}"
     local expected_sha256
@@ -1167,6 +1210,8 @@ EOF
 # A unit whose content differs from the ACFS template (local hardening) is
 # preserved rather than silently regenerated; see the drift logic below.
 _stack_configure_agent_mail_service() {
+    _stack_enforce_core_policy "stack.mcp_agent_mail" install "" || return 1
+
     if [[ "${ACFS_SKIP_AGENT_MAIL:-0}" == "1" ]]; then
         echo "Agent Mail: ACFS_SKIP_AGENT_MAIL=1 set; leaving service untouched" >&2
         return 75
@@ -1996,6 +2041,9 @@ install_mcp_agent_mail() {
     local tool="mcp_agent_mail"
     local target_user="${TARGET_USER:-ubuntu}"
     local target_home=""
+
+    _stack_enforce_core_policy "stack.mcp_agent_mail" install "" || return 1
+
     target_home="$(_stack_target_home "$target_user")"
     local target_dir="$target_home/mcp_agent_mail"
 
@@ -2079,6 +2127,9 @@ install_ubs() {
 # Install Beads Viewer (BV)
 # Task management TUI
 install_bv() {
+    _stack_enforce_core_policy "stack.beads_viewer" install \
+        "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv" || return 1
+
     log_error "Beads Viewer requires generated module stack.beads_viewer; refusing the mutable legacy installer path"
     return 1
 }
@@ -2088,6 +2139,9 @@ install_bv() {
 install_beads_rust() {
     local tool="br"
 
+    _stack_enforce_core_policy "stack.beads_rust" install \
+        "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb" || return 1
+
     if _stack_is_installed "$tool"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
@@ -2095,7 +2149,14 @@ install_beads_rust() {
 
     log_detail "Installing ${STACK_NAMES[$tool]}..."
 
-    if _stack_run_installer "$tool"; then
+    local target_home=""
+    target_home="$(_stack_target_home "${TARGET_USER:-ubuntu}")" || return 1
+
+    if _stack_run_verified_installer "$tool" \
+        --version v0.5.3 \
+        --dest "$target_home/.local/bin" \
+        --artifact-url "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz" \
+        --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"; then
         if _stack_is_installed "$tool"; then
             log_success "${STACK_NAMES[$tool]} installed"
             return 0

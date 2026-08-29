@@ -638,18 +638,14 @@ fi
 
 # MCP Agent Mail helper (leave the real `am` CLI available for service/macros)
 amserve() {
-  if ! command -v am &>/dev/null; then
-    echo "am CLI not found — repair with: acfs update --stack-only"
+  if ! command -v acfs &>/dev/null; then
+    echo "ACFS service manager not found — Agent Mail remains on commissioning HOLD"
     return 1
   fi
 
-  # Detect MCP base path: Rust am uses /mcp/, Python mcp_agent_mail uses /api/
-  local am_mcp_path="/mcp/"
-  if ! am --version 2>/dev/null | grep -q '^am '; then
-    am_mcp_path="/api/"
-  fi
-
-  am serve-http --host "${ACFS_AGENT_MAIL_HOST:-127.0.0.1}" --port "${ACFS_AGENT_MAIL_PORT:-8765}" --path "$am_mcp_path"
+  # The service manager owns the canonical commissioning gate. Never launch
+  # an arbitrary legacy/published `am` binary directly from this helper.
+  acfs services start
 }
 
 # --- ACFS tool aliases (new tools) ---

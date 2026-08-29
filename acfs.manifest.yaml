@@ -2435,14 +2435,19 @@ modules:
             exit 1
           fi
 
+          # Scope the archive contract to the one exact member ACFS selects.
+          # Other archive members, if any, are never extracted or trusted.
           bv_member_count="$(/usr/bin/tar -tzf "$bv_archive" | /usr/bin/awk '$0 == "bv" { count += 1 } END { print count + 0 }')"
-          bv_member_listing="$(/usr/bin/tar -tvzf "$bv_archive" bv)"
-          if [[ "$bv_member_count" != "1" ]] || [[ "$bv_member_listing" != -* ]]; then
-            echo "bv v0.22.0 archive does not contain one regular bv member" >&2
+          bv_member_listing="$(/usr/bin/tar -tvzf "$bv_archive" -- bv)"
+          bv_member_listing_count="$(printf '%s\n' "$bv_member_listing" | /usr/bin/awk 'NF { count += 1 } END { print count + 0 }')"
+          if [[ "$bv_member_count" != "1" ]] \
+            || [[ "$bv_member_listing_count" != "1" ]] \
+            || [[ "$bv_member_listing" != -* ]]; then
+            echo "bv v0.22.0 archive does not contain exactly one selected regular member named bv" >&2
             exit 1
           fi
 
-          /usr/bin/tar -xOzf "$bv_archive" bv > "$bv_binary"
+          /usr/bin/tar -xOzf "$bv_archive" -- bv > "$bv_binary"
           bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_binary" | /usr/bin/awk '{print $1}')"
           if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
             echo "bv v0.22.0 binary checksum mismatch" >&2
@@ -2514,13 +2519,14 @@ modules:
     verify:
       - bv --version | grep -Eq '(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)'
     notes:
-      - "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8c"
-      - "comparison_installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/95a706caf57fc5fde846a453da5f28677d4a81b8c/install.sh"
+      - "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8"
+      - "comparison_installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/95a706caf57fc5fde846a453da5f28677d4a81b8/install.sh"
       - "comparison_installer_raw_sha256=46b6c8a3c90e59b249a8475aa0fea9dbec97527eba0f57aa779d509cc9140270"
       - "linux_arm64_archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89"
       - "linux_arm64_binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320"
       - "versioned_binary_path=$HOME/.local/lib/acfs/bv/v0.22.0/bv"
       - "public_command_path=$HOME/.local/bin/bv -> versioned_binary_path"
+      - "archive_member_contract=ACFS selects exactly one regular member named bv with tar -xOzf -- bv; all unselected archive members are ignored"
       - "The retained immutable upstream installer identity is comparison metadata only; ACFS installs the pinned archive directly and never resolves latest"
 
   - id: stack.cass

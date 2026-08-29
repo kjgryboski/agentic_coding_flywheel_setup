@@ -51,6 +51,17 @@ write_update_refresh_checksums_fixture() {
     done < <(update_required_checksum_tools)
 }
 
+write_update_core_contract_fixture() {
+    local lib_dir="$1"
+
+    cat > "$lib_dir/contract.sh" <<'EOF'
+#!/usr/bin/env bash
+acfs_core_policy_enforce() { return 0; }
+acfs_core_policy_enforce_installer_execution() { return 0; }
+EOF
+    chmod +x "$lib_dir/contract.sh"
+}
+
 @test "update required checksum tools cover the security installer registry" {
     local actual=""
     local expected=""
@@ -64,6 +75,43 @@ write_update_refresh_checksums_fixture() {
         printf 'Expected:\n%s\n' "$expected" >&2
         return 1
     fi
+}
+
+@test "canonical core installer policy rejects held or mutable direct execution" {
+    # shellcheck source=../../../scripts/lib/contract.sh
+    source "$PROJECT_ROOT/scripts/lib/contract.sh"
+
+    declare -gA KNOWN_INSTALLERS=(
+        [br]="https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh"
+    )
+    get_checksum() {
+        [[ "${1:-}" == "br" ]] || return 1
+        printf '%s\n' "b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f"
+    }
+
+    run acfs_core_policy_enforce_installer_execution \
+        stack.mcp_agent_mail update "$HOME"
+    assert_failure
+    assert_output ""
+
+    run acfs_core_policy_enforce_installer_execution \
+        stack.beads_viewer install "$HOME"
+    assert_failure
+    assert_output ""
+
+    run acfs_core_policy_enforce_installer_execution \
+        stack.beads_rust update "$HOME"
+    assert_failure
+    assert_output ""
+
+    run acfs_core_policy_enforce_installer_execution \
+        stack.beads_rust update "$HOME" \
+        --version v0.5.3 \
+        --dest "$HOME/.local/bin" \
+        --artifact-url "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz" \
+        --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"
+    assert_success
+    assert_output ""
 }
 
 @test "checksums metadata validation rejects missing current stack installer" {
@@ -1535,8 +1583,8 @@ EOF
     [[ -f "$HOME/apr-ran" ]]
 }
 
-@test "update_stack skips upstream MCP Agent Mail setup and owns service readiness" {
-    local mode_file="$HOME/mcp-agent-mail-installer-mode"
+@test "update_stack holds MCP Agent Mail before installer or service mutation" {
+    local mutation_marker="$HOME/mcp-agent-mail-mutation-attempted"
 
     QUIET=true
     VERBOSE=false
@@ -1552,6 +1600,13 @@ EOF
     declare -gA KNOWN_INSTALLERS=([mcp_agent_mail]="https://example.test/install-am.sh")
 
     update_require_security() { return 0; }
+    acfs_core_policy_enforce() {
+        if [[ "${1:-}" == "stack.mcp_agent_mail" ]]; then
+            ACFS_CORE_POLICY_REASON="C4 commissioning HOLD: strict Agent Mail admission is unavailable"
+            return 1
+        fi
+        return 1
+    }
     get_checksum() { printf '%s\n' "abc123"; }
     verify_checksum() {
         printf '%s\n' '#!/usr/bin/env bash'
@@ -1560,14 +1615,13 @@ EOF
     update_target_user() { id -un; }
     update_target_home() { printf '%s\n' "$HOME"; }
     update_run_logged_passthrough() {
-        printf '%s\n' "$*" > "$HOME/mcp-agent-mail-passthrough.args"
-        stat -c '%a' "${4:-}" > "$mode_file"
+        : > "$mutation_marker"
         return 0
     }
     update_source_stack_lib() { return 0; }
-    _stack_repair_agent_mail_cli_symlink() { return 0; }
-    _stack_configure_agent_mail_service() { return 0; }
-    _stack_wait_for_agent_mail_health() { return 0; }
+    _stack_repair_agent_mail_cli_symlink() { : > "$mutation_marker"; return 0; }
+    _stack_configure_agent_mail_service() { : > "$mutation_marker"; return 0; }
+    _stack_wait_for_agent_mail_health() { : > "$mutation_marker"; return 0; }
     capture_version_before() { :; }
     capture_version_after() { return 1; }
     update_binary_exists() { return 1; }
@@ -1578,13 +1632,9 @@ EOF
 
     run update_stack
     assert_success
-    local passthrough_args
-    passthrough_args="$(cat "$HOME/mcp-agent-mail-passthrough.args")"
-    [[ "$passthrough_args" == update_run_in_target_context* ]]
-    [[ "$passthrough_args" == *"AM_INSTALL_SKIP_MCP_SETUP=1"* ]]
-    [[ "$passthrough_args" == *"AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1"* ]]
-    [[ "$passthrough_args" == *"bash "* ]]
-    [[ "$(cat "$mode_file")" == "755" ]]
+    assert_output --partial "[fail] MCP Agent Mail"
+    assert_output --partial "C4 commissioning HOLD"
+    [[ ! -e "$mutation_marker" ]]
 }
 
 @test "update_stack runs CASS through target tmpdir fallback and continues on failure" {
@@ -1650,7 +1700,7 @@ EOF
     assert_failure
 }
 
-@test "update_stack honors abort-on-failure for MCP Agent Mail target-home failure" {
+@test "update_stack honors abort-on-failure for MCP Agent Mail commissioning HOLD" {
     QUIET=true
     VERBOSE=false
     DRY_RUN=false
@@ -1665,6 +1715,10 @@ EOF
     declare -gA KNOWN_INSTALLERS=([mcp_agent_mail]="https://example.test/install-am.sh")
 
     update_require_security() { return 0; }
+    acfs_core_policy_enforce() {
+        ACFS_CORE_POLICY_REASON="C4 commissioning HOLD: strict Agent Mail admission is unavailable"
+        return 1
+    }
     get_checksum() { printf '%s\n' "abc123"; }
     verify_checksum() {
         printf '%s\n' '#!/usr/bin/env bash'
@@ -1701,7 +1755,7 @@ EOF
     [[ ! -f "$HOME/apr-ran" ]]
 }
 
-@test "update_stack honors abort-on-failure for MCP Agent Mail installer failure" {
+@test "update_stack commissioning HOLD precedes a failing MCP Agent Mail installer" {
     QUIET=true
     VERBOSE=false
     DRY_RUN=false
@@ -1716,6 +1770,10 @@ EOF
     declare -gA KNOWN_INSTALLERS=([mcp_agent_mail]="https://example.test/install-am.sh")
 
     update_require_security() { return 0; }
+    acfs_core_policy_enforce() {
+        ACFS_CORE_POLICY_REASON="C4 commissioning HOLD: strict Agent Mail admission is unavailable"
+        return 1
+    }
     get_checksum() { printf '%s\n' "abc123"; }
     verify_checksum() {
         printf '%s\n' '#!/usr/bin/env bash'
@@ -1747,9 +1805,9 @@ EOF
 
     assert_failure
     assert_output --partial "[fail] MCP Agent Mail"
-    assert_output --partial "installer failed"
+    assert_output --partial "C4 commissioning HOLD"
     assert_output --partial "Aborting due to failure (--abort-on-failure)"
-    [[ -f "$HOME/mcp-agent-mail-installer-ran" ]]
+    [[ ! -f "$HOME/mcp-agent-mail-installer-ran" ]]
     [[ ! -f "$HOME/apr-ran" ]]
 }
 
@@ -2228,6 +2286,7 @@ load_checksums() {
 }
 EOF
     chmod +x "$repo_root/scripts/lib/security.sh"
+    write_update_core_contract_fixture "$repo_root/scripts/lib"
 
     export ACFS_BIN_DIR="$repo_root/missing-bin"
     export ACFS_HOME="$repo_root/missing-home"
@@ -2285,6 +2344,7 @@ get_checksum() {
 }
 EOF
     chmod +x "$runtime_home/.local/bin/security.sh"
+    write_update_core_contract_fixture "$runtime_home/.local/bin"
 
     cat > "$runtime_home/.acfs/checksums.yaml" <<EOF
 installers:
@@ -7205,7 +7265,7 @@ EOF
     assert_output "$target_am"
 }
 
-@test "stack MCP Agent Mail installer skips upstream setup and waits on ACFS service" {
+@test "stack MCP Agent Mail installer holds before upstream or service mutation" {
     source_lib "stack"
 
     local args_file="$BATS_TEST_TMPDIR/mcp-agent-mail-installer.args"
@@ -7216,6 +7276,11 @@ EOF
     export TARGET_HOME="$target_home"
     export ACFS_STACK_TRUST_TARGET_HOME=true
 
+    _stack_require_security() { return 0; }
+    acfs_core_policy_enforce() {
+        ACFS_CORE_POLICY_REASON="C4 commissioning HOLD: strict Agent Mail admission is unavailable"
+        return 1
+    }
     _stack_tool_ready() { return 1; }
     _stack_is_installed() {
         [[ -f "$target_home/.installed-am" ]]
@@ -7236,12 +7301,12 @@ EOF
     }
 
     run install_mcp_agent_mail
-    assert_success
-    grep -Fq "mcp_agent_mail AM_INSTALL_SKIP_MCP_SETUP=1" "$args_file"
-    grep -Fq "AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1" "$args_file"
-    grep -Fq -- "--dest $target_home/mcp_agent_mail --yes" "$args_file"
-    [[ -f "$target_home/.configured-agent-mail-service" ]]
-    [[ -f "$target_home/.waited-agent-mail-health" ]]
+    assert_failure
+    assert_output --partial "C4 commissioning HOLD"
+    [[ ! -e "$args_file" ]]
+    [[ ! -f "$target_home/.installed-am" ]]
+    [[ ! -f "$target_home/.configured-agent-mail-service" ]]
+    [[ ! -f "$target_home/.waited-agent-mail-health" ]]
 }
 
 @test "stack SLB installer checks active Go PATH lines only" {
@@ -9737,6 +9802,47 @@ EOF
     refute_output --partial "Missing binary: am"
     assert_output --partial "Would reuse or start Agent Mail"
     assert_output --partial "it was left untouched"
+}
+
+@test "acfs services holds Agent Mail before native or tmux mutation" {
+    local services="$PROJECT_ROOT/scripts/lib/acfs-services.sh"
+    local marker="$BATS_TEST_TMPDIR/agent-mail-service-mutation"
+
+    run env ACFS_TEST_MUTATION_MARKER="$marker" bash -c '
+        source "$1"
+        set +e
+        marker_command() { : > "$ACFS_TEST_MUTATION_MARKER"; }
+        _initialize_bins() {
+            _AM_BIN="marker_command"
+            _CM_BIN="marker_command"
+            _CASS_BIN="marker_command"
+            _CURL_BIN="marker_command"
+            _SYSTEMCTL_BIN="marker_command"
+            _TMUX_BIN="marker_command"
+        }
+        _require_tmux() { :; }
+        _session_exists() { return 1; }
+        _agent_mail_is_healthy() { return 1; }
+        native_mode=true
+        _native_agent_mail_unit_available() { [[ "$native_mode" == "true" ]]; }
+        _validate_http_endpoints() { :; }
+        acfs_core_policy_enforce() {
+            ACFS_CORE_POLICY_REASON="C4 commissioning HOLD: strict Agent Mail admission is unavailable"
+            return 1
+        }
+        if cmd_start; then
+            exit 91
+        fi
+        native_mode=false
+        if cmd_start; then
+            exit 92
+        fi
+        [[ ! -e "$ACFS_TEST_MUTATION_MARKER" ]]
+    ' _ "$services"
+
+    assert_success
+    assert_output --partial "C4 commissioning HOLD"
+    [[ ! -e "$marker" ]]
 }
 
 @test "acfs services socket probe includes the requested host" {
@@ -14009,7 +14115,7 @@ EOF
     [[ ! -f "$HOME/global-am-used" ]]
 }
 
-@test "doctor.sh: default Agent Mail stack check ignores mailbox doctor failures after service proof" {
+@test "doctor.sh: Agent Mail stack check remains HOLD despite a healthy legacy service" {
     local doctor_lib="$PROJECT_ROOT/scripts/lib/doctor.sh"
     local checks="$BATS_TEST_TMPDIR/checks.out"
     local doctor_called="$BATS_TEST_TMPDIR/agent-mail-doctor-called"
@@ -14088,6 +14194,10 @@ EOF
         : > "$doctor_called"
         printf '{"healthy":false}\n'
     }
+    acfs_core_policy_enforce() {
+        ACFS_CORE_POLICY_REASON="C4 commissioning HOLD: strict Agent Mail admission is unavailable"
+        return 1
+    }
 
     export TARGET_HOME="$HOME/target-home"
     export DEEP_MODE=false
@@ -14095,7 +14205,7 @@ EOF
     run check_stack
     assert_success
 
-    run grep -F 'stack.mcp_agent_mail|MCP Agent Mail (am 0.2.51)|pass|service healthy|' "$checks"
+    run grep -F 'stack.mcp_agent_mail|MCP Agent Mail|fail|C4 commissioning HOLD: strict Agent Mail admission is unavailable|HOLD: do not install, repair, restart, or accept a published/legacy Agent Mail binary or service' "$checks"
     assert_success
     [[ ! -f "$doctor_called" ]]
 }
@@ -14604,6 +14714,7 @@ load_checksums() {
 }
 EOF
     chmod +x "$target_home/.local/bin/security.sh"
+    write_update_core_contract_fixture "$target_home/.local/bin"
 
     cat > "$stale_home/.local/bin/security.sh" <<EOF
 #!/usr/bin/env bash
@@ -14613,6 +14724,7 @@ load_checksums() {
 }
 EOF
     chmod +x "$stale_home/.local/bin/security.sh"
+    write_update_core_contract_fixture "$stale_home/.local/bin"
 
     export HOME="$current_home"
     export TARGET_USER="acfstestuser"
@@ -14843,15 +14955,62 @@ EOF
     assert_success
 }
 
-@test "install.sh: legacy full-stack phase retains pinned beads_rust and refuses beads_viewer fallback" {
-    run grep -F 'Installing Beads Rust" acfs_run_verified_upstream_script_as_target "br" "bash"' "$PROJECT_ROOT/install.sh"
+@test "install.sh: legacy full-stack phase uses core policy and pinned br/bv routes" {
+    run grep -F 'acfs_core_policy_enforce "stack.beads_rust" install' "$PROJECT_ROOT/install.sh"
+    assert_success
+
+    run grep -F -- '--version v0.5.3' "$PROJECT_ROOT/install.sh"
+    assert_success
+
+    run grep -F 'acfs_core_policy_enforce "stack.beads_viewer" install' "$PROJECT_ROOT/install.sh"
     assert_success
 
     run grep -F 'Installing Beads Viewer" acfs_run_verified_upstream_script_as_target "bv" "bash"' "$PROJECT_ROOT/install.sh"
     assert_failure
 
-    run grep -F 'Beads Viewer requires generated module stack.beads_viewer; refusing the legacy installer path' "$PROJECT_ROOT/install.sh"
+    run grep -F 'acfs_generated_install_stack_beads_viewer' "$PROJECT_ROOT/install.sh"
     assert_success
+}
+
+@test "core commissioning routes fail closed and expose no mutable operator install command" {
+    run grep -F 'acfs_core_policy_enforce "stack.mcp_agent_mail" update ""' "$PROJECT_ROOT/scripts/lib/update.sh"
+    assert_success
+
+    run grep -F 'acfs_core_policy_enforce "stack.mcp_agent_mail" doctor ""' "$PROJECT_ROOT/scripts/lib/doctor.sh"
+    assert_success
+
+    run grep -F 'acfs_core_policy_enforce "stack.mcp_agent_mail" doctor ""' "$PROJECT_ROOT/scripts/lib/doctor_fix.sh"
+    assert_success
+
+    run grep -F 'acfs_core_policy_enforce "stack.mcp_agent_mail" service ""' "$PROJECT_ROOT/scripts/lib/acfs-services.sh"
+    assert_success
+
+    run grep -F 'update_run_verified_installer bv' "$PROJECT_ROOT/scripts/lib/update.sh"
+    assert_failure
+
+    run grep -E 'update_run_verified_installer br[[:space:]]*$' "$PROJECT_ROOT/scripts/lib/update.sh"
+    assert_failure
+
+    run grep -F 'mcp_agent_mail_rust/refs/heads/main/install.sh' "$PROJECT_ROOT/apps/web/lib/flywheel.ts"
+    assert_failure
+
+    run grep -F 'beads_rust/main/install.sh' "$PROJECT_ROOT/apps/web/lib/flywheel.ts"
+    assert_failure
+
+    run grep -F -- '--only stack.mcp_agent_mail' "$PROJECT_ROOT/apps/web/lib/flywheel.ts"
+    assert_success
+
+    run grep -F -- '--only stack.beads_rust' "$PROJECT_ROOT/apps/web/lib/flywheel.ts"
+    assert_success
+
+    run grep -F 'am serve-http --port 8765' "$PROJECT_ROOT/apps/web/lib/flywheel.ts"
+    assert_failure
+
+    run grep -F 'acfs services start' "$PROJECT_ROOT/acfs/zsh/acfs.zshrc"
+    assert_success
+
+    run grep -F 'mcp_agent_mail_rust/refs/heads/main/install.sh' "$PROJECT_ROOT/acfs/templates/workflows/README.md"
+    assert_failure
 }
 
 @test "install.sh: install-wide lock is explicitly released during cleanup" {

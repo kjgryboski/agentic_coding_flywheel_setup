@@ -265,6 +265,10 @@ run_configure() {
             log_success() { :; }
             log_fatal() { echo "[FATAL] $*" >&2; exit 1; }
             source "$LIB_DIR/stack.sh"
+            # This harness isolates the post-admission mask-recovery logic.
+            # Commissioning-HOLD coverage lives in the core-policy/doctor
+            # tests, so provide an explicit test admission at this boundary.
+            _stack_enforce_core_policy() { return 0; }
             _stack_run_as_user() { bash -c "$1"; }
             _stack_configure_agent_mail_service
         ' 2> "$CONFIGURE_ERR_FILE"

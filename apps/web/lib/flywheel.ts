@@ -520,13 +520,13 @@ const _flywheelTools: FlywheelTool[] = [
       "Product bus for multi-repo coordination",
     ],
     cliCommands: [
-      "am serve-http --port 8765",
+      "acfs services start",
       "mcp-agent-mail guard install <project> <repo>",
       "mcp-agent-mail share wizard",
       "mcp-agent-mail doctor check --verbose",
     ],
     installCommand:
-      'curl --proto \'=https\' --proto-redir \'=https\' -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail_rust/refs/heads/main/install.sh" | bash -s -- --yes',
+      './install.sh --yes --mode safe --strict --no-auto-fix --skip-ubuntu-upgrade --only stack.mcp_agent_mail',
     language: "Rust",
   },
   {
@@ -644,7 +644,7 @@ const _flywheelTools: FlywheelTool[] = [
       "br sync --flush-only",
     ],
     installCommand:
-      'curl --proto \'=https\' --proto-redir \'=https\' -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/main/install.sh" | bash',
+      './install.sh --yes --mode safe --strict --no-auto-fix --skip-ubuntu-upgrade --only stack.beads_rust',
     language: "Rust",
   },
   {

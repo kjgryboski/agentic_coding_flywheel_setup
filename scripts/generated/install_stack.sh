@@ -475,6 +475,20 @@ acfs_generated_install_stack_mcp_agent_mail() {
     fi
     log_step "Installing stack.mcp_agent_mail"
 
+    # Core commissioning modules share one fail-closed admission policy.
+    if ! acfs_security_init; then
+        log_error "stack.mcp_agent_mail: security policy unavailable"
+        return 1
+    fi
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1; then
+        log_error "stack.mcp_agent_mail: core admission policy unavailable"
+        return 1
+    fi
+    if ! acfs_core_policy_enforce "stack.mcp_agent_mail" install ''; then
+        log_error "stack.mcp_agent_mail: ${ACFS_CORE_POLICY_REASON:-core admission policy rejected the module}"
+        return 1
+    fi
+
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
         log_info "dry-run: pre-install check: false (target_user)"
     else
@@ -1633,6 +1647,20 @@ acfs_generated_install_stack_beads_rust() {
     fi
     log_step "Installing stack.beads_rust"
 
+    # Core commissioning modules share one fail-closed admission policy.
+    if ! acfs_security_init; then
+        log_error "stack.beads_rust: security policy unavailable"
+        return 1
+    fi
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1; then
+        log_error "stack.beads_rust: core admission policy unavailable"
+        return 1
+    fi
+    if ! acfs_core_policy_enforce "stack.beads_rust" install 'source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb'; then
+        log_error "stack.beads_rust: ${ACFS_CORE_POLICY_REASON:-core admission policy rejected the module}"
+        return 1
+    fi
+
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
         log_info "dry-run: verified installer: stack.beads_rust"
     else
@@ -1755,6 +1783,20 @@ acfs_generated_install_stack_beads_viewer() {
     fi
     log_step "Installing stack.beads_viewer"
 
+    # Core commissioning modules share one fail-closed admission policy.
+    if ! acfs_security_init; then
+        log_error "stack.beads_viewer: security policy unavailable"
+        return 1
+    fi
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1; then
+        log_error "stack.beads_viewer: core admission policy unavailable"
+        return 1
+    fi
+    if ! acfs_core_policy_enforce "stack.beads_viewer" install 'source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv'; then
+        log_error "stack.beads_viewer: ${ACFS_CORE_POLICY_REASON:-core admission policy rejected the module}"
+        return 1
+    fi
+
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
         log_info "dry-run: install: install content-addressed bv v0.22.0 for Linux ARM64 (target_user)"
     else
@@ -1822,14 +1864,19 @@ if [[ "$bv_actual_archive_sha256" != "$bv_archive_sha256" ]]; then
   exit 1
 fi
 
+# Scope the archive contract to the one exact member ACFS selects.
+# Other archive members, if any, are never extracted or trusted.
 bv_member_count="$(/usr/bin/tar -tzf "$bv_archive" | /usr/bin/awk '$0 == "bv" { count += 1 } END { print count + 0 }')"
-bv_member_listing="$(/usr/bin/tar -tvzf "$bv_archive" bv)"
-if [[ "$bv_member_count" != "1" ]] || [[ "$bv_member_listing" != -* ]]; then
-  echo "bv v0.22.0 archive does not contain one regular bv member" >&2
+bv_member_listing="$(/usr/bin/tar -tvzf "$bv_archive" -- bv)"
+bv_member_listing_count="$(printf '%s\n' "$bv_member_listing" | /usr/bin/awk 'NF { count += 1 } END { print count + 0 }')"
+if [[ "$bv_member_count" != "1" ]] \
+  || [[ "$bv_member_listing_count" != "1" ]] \
+  || [[ "$bv_member_listing" != -* ]]; then
+  echo "bv v0.22.0 archive does not contain exactly one selected regular member named bv" >&2
   exit 1
 fi
 
-/usr/bin/tar -xOzf "$bv_archive" bv > "$bv_binary"
+/usr/bin/tar -xOzf "$bv_archive" -- bv > "$bv_binary"
 bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_binary" | /usr/bin/awk '{print $1}')"
 if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
   echo "bv v0.22.0 binary checksum mismatch" >&2

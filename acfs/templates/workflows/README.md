@@ -30,9 +30,13 @@ Check your `checksums.yaml` entry to see the installer path:
 ntm:
   url: "https://raw.githubusercontent.com/Dicklesworthstone/ntm/main/install.sh"
 
-# scripts/install.sh → use notify-acfs-scripts.yml
-mcp_agent_mail:
-  url: "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail_rust/refs/heads/main/install.sh"
+# Commissioning exception: Agent Mail is on HOLD and has no admitted upstream
+# notification/install route until its exact-source/auth/state contract passes.
+# Do not substitute refs/heads/main or a published binary installer here.
+
+# Immutable root installer identity used by the admitted beads_rust contract.
+br:
+  url: "https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh"
 ```
 
 ## Full Documentation

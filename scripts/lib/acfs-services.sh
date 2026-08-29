@@ -76,6 +76,32 @@ _ok()    { printf '%s[acfs-services]%s %s%s%s\n' "$_C_CYAN" "$_C_RESET" "$_C_GRE
 _warn()  { printf '%s[acfs-services]%s %s%s%s\n' "$_C_CYAN" "$_C_RESET" "$_C_YELLOW" "$*" "$_C_RESET" >&2; }
 _err()   { printf '%s[acfs-services]%s %s%s%s\n' "$_C_CYAN" "$_C_RESET" "$_C_RED" "$*" "$_C_RESET" >&2; }
 
+_agent_mail_mutation_admitted() {
+    local services_script_path="${BASH_SOURCE[0]}"
+    local services_script_dir=""
+    local contract_script=""
+
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1; then
+        services_script_dir="${services_script_path%/*}"
+        [[ "$services_script_dir" != "$services_script_path" ]] || services_script_dir="."
+        services_script_dir="$(cd "$services_script_dir" && pwd -P)" || return 1
+        contract_script="$services_script_dir/contract.sh"
+        if [[ -f "$contract_script" && ! -L "$contract_script" ]]; then
+            # shellcheck disable=SC1090  # runtime-resolved sibling library
+            source "$contract_script"
+        fi
+    fi
+
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce "stack.mcp_agent_mail" service ""; then
+        _err "${ACFS_CORE_POLICY_REASON:-Agent Mail core admission policy unavailable}"
+        _err "Agent Mail service mutation is on HOLD; use 'acfs doctor' for the admission status."
+        return 1
+    fi
+
+    return 0
+}
+
 _system_binary_path() {
     local name="${1:-}"
     local dir=""
@@ -357,6 +383,10 @@ _tag_and_start_pane() {
     local service_name="$2"
     local command_string=""
 
+    if [[ "$service_name" == "agent-mail" ]]; then
+        _agent_mail_mutation_admitted || return 1
+    fi
+
     command_string="$(_service_cmd "$service_name")" || return 1
     "$_TMUX_BIN" set-option -p -t "$pane_id" @acfs_service "$service_name" || return 1
     "$_TMUX_BIN" select-pane -t "$pane_id" -T "$service_name" || return 1
@@ -419,6 +449,7 @@ cmd_start() {
     if _agent_mail_is_healthy; then
         _info "Reusing healthy Agent Mail at $ACFS_AGENT_MAIL_HOST:$ACFS_AGENT_MAIL_PORT."
     elif _native_agent_mail_unit_available; then
+        _agent_mail_mutation_admitted || return 1
         _info "Starting native Agent Mail user service..."
         if ! "$_SYSTEMCTL_BIN" --user start agent-mail.service >/dev/null 2>&1 || \
            ! _wait_for_agent_mail 15; then
@@ -427,6 +458,7 @@ cmd_start() {
             return 1
         fi
     else
+        _agent_mail_mutation_admitted || return 1
         agent_mail_in_tmux=true
     fi
 
@@ -493,6 +525,14 @@ cmd_stop() {
 
     local stopped_any=false
     local rc=0
+
+    # The ACFS tmux session may own an Agent Mail fallback. Conservatively
+    # require admission before killing any such session so stop/restart cannot
+    # bypass the commissioning HOLD through the service manager.
+    if _native_agent_mail_is_active || _session_exists; then
+        _agent_mail_mutation_admitted || return 1
+    fi
+
     _info "Stopping ACFS services..."
 
     if _native_agent_mail_is_active; then

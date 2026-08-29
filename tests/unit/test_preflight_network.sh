@@ -437,6 +437,8 @@ test_dns_check_hosts() {
 
 extract_dns_address_helpers() {
     sed -n \
+        -e '/^dns_ipv4_address_valid()/,/^}$/p' \
+        -e '/^dns_ipv6_address_valid()/,/^}$/p' \
         -e '/^dns_output_has_address()/,/^}$/p' \
         -e '/^dns_host_has_address()/,/^}$/p' \
         "$REPO_ROOT/scripts/preflight.sh"
@@ -541,6 +543,36 @@ test_dns_address_resolution_semantics() {
         harness_pass "dig AAAA-only answer passes"
     else
         harness_fail "dig AAAA-only answer passes"
+    fi
+
+    if dns_output_has_address ":"; then
+        harness_fail "a lone colon is rejected as malformed IPv6"
+    else
+        harness_pass "a lone colon is rejected as malformed IPv6"
+    fi
+
+    if dns_output_has_address "2001:db8:::9"; then
+        harness_fail "triple-colon IPv6 is rejected"
+    else
+        harness_pass "triple-colon IPv6 is rejected"
+    fi
+
+    if dns_output_has_address "256.0.0.1"; then
+        harness_fail "out-of-range first IPv4 octet is rejected"
+    else
+        harness_pass "out-of-range first IPv4 octet is rejected"
+    fi
+
+    if dns_output_has_address "203.0.113.999"; then
+        harness_fail "out-of-range final IPv4 octet is rejected"
+    else
+        harness_pass "out-of-range final IPv4 octet is rejected"
+    fi
+
+    if dns_output_has_address "255.255.255.255 2001:db8::1"; then
+        harness_pass "boundary IPv4 and compressed IPv6 remain accepted"
+    else
+        harness_fail "boundary IPv4 and compressed IPv6 remain accepted"
     fi
 }
 

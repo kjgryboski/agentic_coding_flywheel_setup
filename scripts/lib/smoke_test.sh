@@ -1163,7 +1163,7 @@ _check_agent_mail() {
     if _smoke_system_curl -fsS --max-time 5 http://127.0.0.1:8765/health/liveness &>/dev/null; then
         _smoke_info "Agent Mail: running"
     else
-        _smoke_warn "Agent Mail: not running" "re-run ACFS update/install to rewrite agent-mail.service, then run 'systemctl --user enable --now agent-mail.service'"
+        _smoke_warn "Agent Mail: not running" "inspect the commissioning HOLD with 'acfs doctor'; service changes must use 'acfs services start'"
     fi
 }
 

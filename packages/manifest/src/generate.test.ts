@@ -426,12 +426,17 @@ describe('Generated verified installer args', () => {
     const functionStart = stackContent.indexOf('acfs_generated_install_stack_mcp_agent_mail() {');
     const functionEnd = stackContent.indexOf('acfs_generated_install_stack_meta_skill() {', functionStart);
     const agentMailFunction = stackContent.slice(functionStart, functionEnd);
+    const policyIndex = agentMailFunction.indexOf(
+      'acfs_core_policy_enforce "stack.mcp_agent_mail" install \'\''
+    );
     const holdIndex = agentMailFunction.indexOf('C4 commissioning HOLD: published Agent Mail binaries are forbidden');
     const installerIndex = agentMailFunction.indexOf('# Try security-verified install');
     const legacyServiceIndex = agentMailFunction.indexOf('cat > "$unit_file" <<UNIT_EOF');
 
     expect(functionStart).toBeGreaterThanOrEqual(0);
     expect(functionEnd).toBeGreaterThan(functionStart);
+    expect(policyIndex).toBeGreaterThanOrEqual(0);
+    expect(holdIndex).toBeGreaterThan(policyIndex);
     expect(holdIndex).toBeGreaterThanOrEqual(0);
     expect(installerIndex).toBeGreaterThan(holdIndex);
     expect(legacyServiceIndex).toBeGreaterThan(holdIndex);
@@ -504,13 +509,25 @@ describe('Generated verified installer args', () => {
     expect(bv?.notes).toContain(
       'comparison_installer_raw_sha256=46b6c8a3c90e59b249a8475aa0fea9dbec97527eba0f57aa779d509cc9140270'
     );
+    expect(bv?.notes).toContain(
+      'source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8'
+    );
+    expect(bv?.notes).toContain(
+      'archive_member_contract=ACFS selects exactly one regular member named bv with tar -xOzf -- bv; all unselected archive members are ignored'
+    );
 
     const stackContent = readFileSync(resolve(GENERATED_DIR, 'install_stack.sh'), 'utf-8');
     const bvStart = stackContent.indexOf('acfs_generated_install_stack_beads_viewer() {');
     const bvEnd = stackContent.indexOf('acfs_generated_install_stack_cass() {', bvStart);
     const bvFunction = stackContent.slice(bvStart, bvEnd);
+    const bvPolicyIndex = bvFunction.indexOf(
+      'acfs_core_policy_enforce "stack.beads_viewer" install'
+    );
+    const bvArchiveIndex = bvFunction.indexOf('bv_url="https://github.com/');
     expect(bvStart).toBeGreaterThanOrEqual(0);
     expect(bvEnd).toBeGreaterThan(bvStart);
+    expect(bvPolicyIndex).toBeGreaterThanOrEqual(0);
+    expect(bvArchiveIndex).toBeGreaterThan(bvPolicyIndex);
     expect(bvFunction).toContain(
       'https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz'
     );
@@ -523,8 +540,25 @@ describe('Generated verified installer args', () => {
     expect(bvFunction).toContain('$HOME/.local/lib/acfs/bv/v0.22.0');
     expect(bvFunction).toContain('/usr/bin/ln -s "$bv_versioned_target" "$bv_link_stage"');
     expect(bvFunction).toContain('/usr/bin/readlink "$bv_public_target"');
+    expect(bvFunction).toContain('/usr/bin/tar -tvzf "$bv_archive" -- bv');
+    expect(bvFunction).toContain('/usr/bin/tar -xOzf "$bv_archive" -- bv > "$bv_binary"');
+    expect(bvFunction).toContain('[[ "$bv_member_listing_count" != "1" ]]');
     expect(bvFunction).not.toContain('releases/latest');
     expect(bvFunction).not.toContain('# Try security-verified install');
+
+    const brStart = stackContent.indexOf('acfs_generated_install_stack_beads_rust() {');
+    const brEnd = stackContent.indexOf('acfs_generated_install_stack_beads_viewer() {', brStart);
+    const brFunction = stackContent.slice(brStart, brEnd);
+    const brPolicyIndex = brFunction.indexOf(
+      'acfs_core_policy_enforce "stack.beads_rust" install'
+    );
+    const brInstallerIndex = brFunction.indexOf('# Try security-verified install');
+    expect(brStart).toBeGreaterThanOrEqual(0);
+    expect(brEnd).toBeGreaterThan(brStart);
+    expect(brPolicyIndex).toBeGreaterThanOrEqual(0);
+    expect(brInstallerIndex).toBeGreaterThan(brPolicyIndex);
+    expect(brFunction).not.toContain('/main/install.sh');
+    expect(brFunction).not.toContain('releases/latest');
   });
 
   test('stack.ru passes RU_NON_INTERACTIVE via env in generated installer', () => {

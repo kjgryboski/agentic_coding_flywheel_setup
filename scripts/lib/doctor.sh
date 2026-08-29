@@ -796,6 +796,7 @@ fi
 _acfs_doctor_source_first "output.sh" || true
 _acfs_doctor_source_first "progress.sh" || true
 _acfs_doctor_source_first "gum_ui.sh" || true
+_acfs_doctor_source_first "contract.sh" || true
 
 # Source doctor_fix after target-home resolution so its autofix state and
 # helper lookups cannot be steered by a stale caller ACFS_HOME.
@@ -2595,7 +2596,12 @@ check_stack() {
     am_install_fix="Re-run: $(fix_for_module "stack.mcp_agent_mail")"
     am_label="MCP Agent Mail"
 
-    if am_bin="$(doctor_agent_mail_cli_path 2>/dev/null || true)" && [[ -n "$am_bin" ]]; then
+    if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce "stack.mcp_agent_mail" doctor ""; then
+        check "stack.mcp_agent_mail" "$am_label" "fail" \
+            "${ACFS_CORE_POLICY_REASON:-core admission policy unavailable}" \
+            "HOLD: do not install, repair, restart, or accept a published/legacy Agent Mail binary or service"
+    elif am_bin="$(doctor_agent_mail_cli_path 2>/dev/null || true)" && [[ -n "$am_bin" ]]; then
         local curl_bin=""
         local id_bin=""
         local systemctl_bin=""

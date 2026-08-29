@@ -858,7 +858,7 @@ checksum_recovery_output=$(
 
         cat > "$tmpdir/checksums.yaml" <<EOF
 installers:
-  mcp_agent_mail:
+  ntm:
     url: "https://example.invalid/stale-install.sh"
     sha256: "1111111111111111111111111111111111111111111111111111111111111111"
 EOF
@@ -907,13 +907,13 @@ EOF
         acfs_fetch_fresh_checksums_to_file() {
             cat > "$1" <<EOF
 installers:
-  mcp_agent_mail:
+  ntm:
     url: "https://example.invalid/fresh-install.sh"
     sha256: "$fake_installer_sha"
 EOF
         }
 
-        update_run_verified_installer mcp_agent_mail
+        update_run_verified_installer ntm
     ' 2>&1
 ) || true
 
@@ -962,11 +962,11 @@ section "Test 9b: shell helpers route repairs through ACFS verification"
 if [[ -f "$ZSHRC" ]]; then
     amserve_block=$(sed -n '/^amserve() {/,/^}/p' "$ZSHRC")
     bv_block=$(sed -n '/^bv() {/,/^}/p' "$ZSHRC")
-    if echo "$amserve_block" | grep -Fq 'acfs update --stack-only' && \
+    if echo "$amserve_block" | grep -Fq 'acfs services start' && \
        echo "$bv_block" | grep -Fq 'acfs update --stack-only'; then
-        pass "amserve and bv recovery hints delegate to the ACFS stack updater"
+        pass "amserve and bv recovery hints delegate to canonical ACFS routes"
     else
-        fail "amserve or bv recovery hint bypasses the ACFS stack updater"
+        fail "amserve or bv recovery hint bypasses canonical ACFS routing"
     fi
     if printf '%s\n%s\n' "$amserve_block" "$bv_block" | grep -Eq 'raw\.githubusercontent\.com|\|[[:space:]]*(bash|sh)([[:space:]]|$)'; then
         fail "shell helper recovery hint contains a direct network-to-shell installer"
