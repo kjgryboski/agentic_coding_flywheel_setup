@@ -61,6 +61,8 @@ flywheel doctor --json
 flywheel stop
 flywheel capabilities --json
 flywheel robot-docs guide
+flywheel repository inspect /path/to/repository --json
+flywheel rollout plan /path/to/inventory.json --json
 ```
 
 The current scope is `PARTIAL_SAFE`: eight approved modules are installed and
@@ -68,6 +70,10 @@ The current scope is `PARTIAL_SAFE`: eight approved modules are installed and
 document is the unified control surface: it reports VM and doctor health,
 qualification results, exact source/tree/bundle identities, installed and held
 module counts, current blockers, and an optional repository rollout receipt.
+Repository inspection and rollout planning are read-only: they inventory exact
+Git identity, existing guidance, automation, dirty state, and `.acfs-new`
+conflicts, then produce content-addressed cohort plans without creating a
+branch, PR, check, or provider mutation.
 
 > **Production environments:** For stable, reproducible installs, pin to a tagged release or specific commit:
 > ```bash

@@ -37,6 +37,8 @@ Usage:
   flywheel stop
   flywheel capabilities --json
   flywheel robot-docs guide
+  flywheel repository inspect PATH [--json]
+  flywheel rollout plan INVENTORY.json [--json]
 
 Options:
   --json                  machine-readable read-side output
@@ -556,6 +558,8 @@ print(json.dumps({
         {"command": "flywheel stop", "kind": "mutation"},
         {"command": "flywheel capabilities --json", "kind": "read"},
         {"command": "flywheel robot-docs guide", "kind": "read"},
+        {"command": "flywheel repository inspect PATH --json", "kind": "read"},
+        {"command": "flywheel rollout plan INVENTORY.json --json", "kind": "read"},
     ],
     "feature_flags": {
         "mac_ubuntu_vm": True,
@@ -595,6 +599,10 @@ Agent Flywheel operator guide
    flywheel doctor --json
 6. Stop the VM cleanly:
    flywheel stop
+7. Inspect one repository before proposing an onboarding PR:
+   flywheel repository inspect PATH --json
+8. Build a non-mutating progressive cohort plan:
+   flywheel rollout plan INVENTORY.json --json
 
 The status document reports exact source and bundle identities, current host
 qualification, installed and held modules, repository rollout evidence, and
@@ -603,12 +611,32 @@ copy-pasteable remediation commands. PARTIAL_SAFE never authorizes any of the
 GUIDE
 }
 
+repository_control_command() {
+    local action="$1"
+    local resource="$2"
+    local root=""
+    local script=""
+    local arguments=("$action" "$resource")
+    root="$(source_root)"
+    script="$root/scripts/flywheel-repository-control.py"
+    [[ -f "$script" && ! -L "$script" ]] \
+        || die 3 "repository control is unavailable; rerun flywheel mac install from the current source"
+    ((JSON == 1)) && arguments+=(--json)
+    python3 "$script" "${arguments[@]}"
+}
+
 command_name="${1:-help}"
 shift || true
 subcommand=""
-if [[ "$command_name" == "mac" || "$command_name" == "robot-docs" ]]; then
+resource=""
+if [[ "$command_name" == "mac" || "$command_name" == "robot-docs" \
+    || "$command_name" == "repository" || "$command_name" == "rollout" ]]; then
     subcommand="${1:-}"
     shift || true
+fi
+if [[ "$command_name" == "repository" || "$command_name" == "rollout" ]]; then
+    resource="${1:-}"
+    [[ -n "$resource" ]] && shift || true
 fi
 while (($#)); do
     case "$1" in
@@ -636,9 +664,21 @@ case "$command_name:$subcommand" in
     stop:) stop_command ;;
     capabilities:) capabilities_command ;;
     robot-docs:guide) robot_docs_command ;;
+    repository:inspect)
+        [[ -n "$resource" ]] \
+            || die 2 "repository inspect requires a path; run flywheel repository inspect PATH --json"
+        repository_control_command inspect "$resource"
+        ;;
+    rollout:plan)
+        [[ -n "$resource" ]] \
+            || die 2 "rollout plan requires an inventory; run flywheel rollout plan INVENTORY.json --json"
+        repository_control_command plan "$resource"
+        ;;
     help:|--help:|-h:) usage ;;
     mac:*) die 2 "unknown Mac action: ${subcommand:-missing}; run flywheel mac install" ;;
     robot-docs:*) die 2 "unknown robot-docs topic: ${subcommand:-missing}; run flywheel robot-docs guide" ;;
+    repository:*) die 2 "unknown repository action: ${subcommand:-missing}; run flywheel repository inspect PATH --json" ;;
+    rollout:*) die 2 "unknown rollout action: ${subcommand:-missing}; run flywheel rollout plan INVENTORY.json --json" ;;
     statsu:|stats:|state:) die 2 "unknown command: $command_name; did you mean: flywheel status --json" ;;
     docter:|doctro:) die 2 "unknown command: $command_name; did you mean: flywheel doctor --json" ;;
     instal:|install:) die 2 "unknown command: $command_name; did you mean: flywheel mac install" ;;

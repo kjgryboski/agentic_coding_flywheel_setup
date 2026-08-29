@@ -78,13 +78,19 @@ assert "supported_hosts" not in value["commissioning_scope"]
 PY
 
 QUALIFICATION_ROOT="$TEST_ROOT/qualification-source"
-mkdir -p "$QUALIFICATION_ROOT/config"
+mkdir -p "$QUALIFICATION_ROOT/config" "$QUALIFICATION_ROOT/.github/workflows" "$QUALIFICATION_ROOT/scripts"
 git -C "$QUALIFICATION_ROOT" init -q
 printf 'schema_version: 2\n' >"$QUALIFICATION_ROOT/acfs.manifest.yaml"
 printf '0.8.0\n' >"$QUALIFICATION_ROOT/VERSION"
+printf '# Repository instructions\n' >"$QUALIFICATION_ROOT/AGENTS.md"
+printf 'name: test\non: push\njobs: {}\n' >"$QUALIFICATION_ROOT/.github/workflows/test.yml"
 cp "$REPO_ROOT/config/flywheel-partial-safe-allowlist.json" \
     "$QUALIFICATION_ROOT/config/flywheel-partial-safe-allowlist.json"
-git -C "$QUALIFICATION_ROOT" add acfs.manifest.yaml VERSION config/flywheel-partial-safe-allowlist.json
+cp "$REPO_ROOT/scripts/flywheel-repository-control.py" \
+    "$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py"
+git -C "$QUALIFICATION_ROOT" add \
+    acfs.manifest.yaml VERSION AGENTS.md .github/workflows/test.yml \
+    config/flywheel-partial-safe-allowlist.json scripts/flywheel-repository-control.py
 git -C "$QUALIFICATION_ROOT" -c user.name=Flywheel -c user.email=flywheel.invalid@example.test \
     commit -qm initial
 printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$TEST_ROOT/os-release"
@@ -201,8 +207,51 @@ assert value["schema"] == "agent-flywheel.capabilities/v1"
 assert value["exit_codes"]["5"] == "operation_conflict"
 assert value["feature_flags"]["portable_qualification_host"] is True
 assert any(item["command"] == "flywheel status --json" for item in value["commands"])
+assert any(item["command"] == "flywheel repository inspect PATH --json" for item in value["commands"])
 ' "$capabilities_json"
 "$REPO_ROOT/flywheel" robot-docs guide | grep -F 'flywheel status --json --rollout-receipt FILE' >/dev/null
+
+inspection_json="$("$REPO_ROOT/flywheel" repository inspect "$QUALIFICATION_ROOT" --json)"
+[[ "$inspection_json" == "$("$REPO_ROOT/flywheel" repository inspect "$QUALIFICATION_ROOT" --json)" ]]
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["schema"] == "agent-flywheel.repository-inspection/v1"
+assert value["status"] == "ready_for_bounded_setup_pr"
+assert value["mutation_authorized"] is False
+assert value["repository"]["clean"] is True
+assert value["guidance"]["root_agents"]["path"] == "AGENTS.md"
+assert value["guidance"]["unresolved_acfs_new"] == []
+assert value["automation"]["github_workflows"] == [".github/workflows/test.yml"]
+assert value["admission"]["live_rollout_eligible"] is False
+assert len(value["inspection_sha256"]) == 64
+' "$inspection_json"
+
+python3 - "$TEST_ROOT/rollout-inventory.json" "$QUALIFICATION_ROOT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump({
+        "schema": "agent-flywheel.rollout-inventory/v1",
+        "repositories": [{"path": sys.argv[2], "cohort": "pilot"}],
+    }, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+PY
+plan_json="$("$REPO_ROOT/flywheel" rollout plan "$TEST_ROOT/rollout-inventory.json" --json)"
+[[ "$plan_json" == "$("$REPO_ROOT/flywheel" rollout plan "$TEST_ROOT/rollout-inventory.json" --json)" ]]
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["schema"] == "agent-flywheel.progressive-rollout-plan/v1"
+assert value["status"] == "ready_for_setup_prs"
+assert value["execution_status"] == "plan_only"
+assert value["mutation_authorized"] is False
+assert value["repository_count"] == 1
+assert value["cohorts"][0]["cohort"] == "pilot"
+assert value["cohorts"][0]["live_rollout_eligible"] is False
+assert len(value["plan_sha256"]) == 64
+' "$plan_json"
 
 typo_rc=0
 typo_error="$("$REPO_ROOT/flywheel" statsu 2>&1)" || typo_rc=$?
