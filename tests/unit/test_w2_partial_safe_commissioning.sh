@@ -37,6 +37,12 @@ else
     fail "moduleless selection is admitted only with the exact allowlist" "$ACFS_LICENSE_POLICY_REASON"
 fi
 
+if acfs_r1_runtime_admit_entry helper; then
+    pass "exact allowlist admits only moduleless pre-plan metadata bootstrap"
+else
+    fail "exact allowlist admits only moduleless pre-plan metadata bootstrap" "$ACFS_R1_POLICY_REASON"
+fi
+
 ONLY_MODULES=(users.ubuntu base.filesystem cli.modern lang.bun lang.uv lang.rust lang.go)
 ONLY_PHASES=()
 SKIP_MODULES=()

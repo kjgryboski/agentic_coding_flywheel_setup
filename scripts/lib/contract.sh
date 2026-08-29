@@ -583,7 +583,19 @@ acfs_r1_runtime_admit_entry() {
         direct|probe|helper)
             # Never trust an inherited/exported validation marker. Recompute
             # the exact graph and manifest bindings at the call boundary.
-            if ! acfs_r1_runtime_validate_plan; then
+            # The W2 selection engine needs moduleless metadata helpers to
+            # load the bound manifest before a plan can exist.  That narrow
+            # bootstrap exception requires the exact immutable allowlist and
+            # ends as soon as the plan is validated.  Module entrypoints never
+            # receive this exception.
+            if acfs_w2_partial_safe_requested \
+                && [[ -z "$module_id" ]] \
+                && [[ "${ACFS_R1_PLAN_VALIDATED:-false}" != "true" ]]; then
+                acfs_w2_partial_safe_verify_allowlist || {
+                    ACFS_R1_POLICY_REASON="${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-W2 PARTIAL_SAFE allowlist verification failed}"
+                    return 1
+                }
+            elif ! acfs_r1_runtime_validate_plan; then
                 if [[ -z "${ACFS_R1_POLICY_REASON:-}" ]]; then
                     ACFS_R1_POLICY_REASON="R1 rejects $entry dispatch without an exact validated eleven-module plan"
                 fi
