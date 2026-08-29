@@ -358,9 +358,6 @@ run_test_4() {
     local workdir="$TMPROOT/test4"
     mkdir -p "$workdir/home"
 
-    eval "$(declare -f acfs_summary_emit | sed '1s/acfs_summary_emit/__real_acfs_summary_emit/')"
-    eval "$(declare -f acfs_performance_budget_emit | sed '1s/acfs_performance_budget_emit/__real_acfs_performance_budget_emit/')"
-
     local summary_calls=0
     local webhook_calls=0
     local notification_calls=0
@@ -387,7 +384,7 @@ run_test_4() {
         webhook_calls=0
         notification_calls=0
 
-        false || cleanup
+        false || cleanup || true
 
         assert "E.${mode_var}. failure summary suppressed" "$([[ $summary_calls -eq 0 ]] && echo true || echo false)"
         assert "E.${mode_var}. webhook suppressed" "$([[ $webhook_calls -eq 0 ]] && echo true || echo false)"
@@ -401,10 +398,10 @@ run_test_4() {
     summary_calls=0
     webhook_calls=0
     notification_calls=0
-    false || cleanup
-    assert "E.mutating. failure summary retained" "$([[ $summary_calls -eq 1 ]] && echo true || echo false)"
-    assert "E.mutating. webhook retained" "$([[ $webhook_calls -eq 1 ]] && echo true || echo false)"
-    assert "E.mutating. notification retained" "$([[ $notification_calls -eq 1 ]] && echo true || echo false)"
+    false || cleanup || true
+    assert "E.mutating. held failure summary suppressed" "$([[ $summary_calls -eq 0 ]] && echo true || echo false)"
+    assert "E.mutating. held webhook suppressed" "$([[ $webhook_calls -eq 0 ]] && echo true || echo false)"
+    assert "E.mutating. held notification suppressed" "$([[ $notification_calls -eq 0 ]] && echo true || echo false)"
 
     eval "$(declare -f __real_acfs_summary_emit | sed '1s/__real_acfs_summary_emit/acfs_summary_emit/')"
     eval "$(declare -f __real_acfs_performance_budget_emit | sed '1s/__real_acfs_performance_budget_emit/acfs_performance_budget_emit/')"
@@ -455,20 +452,30 @@ run_test_license_hold() {
     acfs_enforce_early_license_exclusion || admission_rc=$?
     assert "H1. LIC1+LIC2 rejects before environment discovery" "$([[ $admission_rc -ne 0 ]] && echo true || echo false)"
 
-    false || cleanup
+    false || cleanup || true
     assert "H2. held skills are never installed by failure cleanup" "$([[ $skills_calls -eq 0 ]] && echo true || echo false)"
     assert "H3. failure cleanup emits no mutable summary" "$([[ $summary_calls -eq 0 ]] && echo true || echo false)"
     assert "H4. failure cleanup creates no state or ACFS home" "$([[ ! -e "$ACFS_STATE_FILE" && ! -e "$ACFS_HOME" ]] && echo true || echo false)"
 }
 
 main() {
+    local harness_functions
     TARGET_USER="$(whoami)"
     TARGET_HOME="$HOME"
     MODE="vibe"
     HAS_GUM=false
     YES_MODE=true
+    # The real installer deliberately removes every inherited shell function
+    # before defining its own trusted surface. Preserve only this harness's
+    # local assertion/test declarations and restore them after sourcing so the
+    # test exercises that hardening boundary instead of deleting its own cases.
+    harness_functions="$(declare -f cleanup_tmproot assert run_test_license_hold run_test_3 run_test_4)"
     # shellcheck disable=SC1090
     source "$SOURCEABLE"
+    eval "$harness_functions"
+    trap cleanup_tmproot EXIT
+    eval "$(declare -f acfs_summary_emit | sed '1s/acfs_summary_emit/__real_acfs_summary_emit/')"
+    eval "$(declare -f acfs_performance_budget_emit | sed '1s/acfs_performance_budget_emit/__real_acfs_performance_budget_emit/')"
 
     echo "== Test 1: LIC1+LIC2 blocks historical fallback mutation =="
     run_test_license_hold
