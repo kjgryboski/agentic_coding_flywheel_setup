@@ -6,7 +6,7 @@
 # ============================================================
 # Data-only manifest index. Safe to source.
 
-ACFS_MANIFEST_SHA256="27f91a0f723a723145431ae5b303a8b127890dde26ab8b0de8b11b8a5de2ba06"
+ACFS_MANIFEST_SHA256="61fed87a0aa299fc6e6c657afb23845ec46137392393d0113e8d11b50b7dda65"
 
 ACFS_MODULES_IN_ORDER=(
   "base.system"
@@ -717,7 +717,7 @@ declare -gA ACFS_MODULE_DESC=(
 )
 
 declare -gA ACFS_MODULE_INSTALLED_CHECK=(
-  ['base.system']="command -v curl && command -v git && command -v jq"
+  ['base.system']="command -v curl && command -v git && command -v update-ca-certificates && command -v unzip && command -v tar && command -v xz && command -v jq && command -v make && command -v gcc && command -v gpg && command -v lsb_release"
   ['base.filesystem']="test -d /data/projects && test -d ~/.acfs"
   ['shell.zsh']="command -v zsh"
   ['shell.omz']="test -d ~/.oh-my-zsh && test -f ~/.acfs/zsh/acfs.zshrc"

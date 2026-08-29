@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "status": "PARTIAL_SAFE",
+  "authority": {
+    "upstream_commit": "f659b12ad11f6fe2d5de648785d7d06de6240df2",
+    "u6_commit": "f62814eac0a3c19ebed7daf1375ec4f480490003",
+    "u6_tree": "8fffdcde86d24cca8be0367cf0d0f033fa2f8e1d",
+    "u6_writer_receipt_sha256": "30466cf17d327993bcb6a7885c962c4ba519ef1cf4641bcb3791c27588ee9183",
+    "u6_verifier_sha256": "8cc610e5d25b594951cdee99915a9a89832a34e4cdf8dd5ef737f37bde9f8ebd"
+  },
+  "allowed_seed_modules": [
+    "users.ubuntu",
+    "base.filesystem",
+    "cli.modern",
+    "lang.bun",
+    "lang.uv",
+    "lang.rust",
+    "lang.go"
+  ],
+  "allowed_resolved_modules": [
+    "base.system",
+    "users.ubuntu",
+    "base.filesystem",
+    "cli.modern",
+    "lang.bun",
+    "lang.uv",
+    "lang.rust",
+    "lang.go"
+  ],
+  "held_exclusions": {
+    "count": 27,
+    "canonical_set_sha256": "7bbf389cf9d7cce38c2c0662649e10873b4bfecda23d69cf9bc35e995d0e3606",
+    "lic1_sha256": "9bfd85c340c6223482e07b96c668600e0db9a18b8a4f25e45f77f0129af63300",
+    "lic2_sha256": "89b56c5a62cea238a9e9d3b6ff88a2923a88bafd45c982a523dba5c7de5b51ee",
+    "agent_mail_config_count": 6,
+    "agent_mail_configs_required_absent": true,
+    "runtime_authorization": "none"
+  },
+  "pfr6": {
+    "status": "ELIGIBLE_NOT_INSTALLED",
+    "commit": "8fb8bc5f69d327f01450a3c0dd1ad2cad678ad74",
+    "tree": "918f8cea8a01514af89c472e250a931bfb14e4fe",
+    "bundle_sha256": "07190bf199dc55abf1d1c2d9e92b2bf56cfe248f437ccd629070f258df959e7e",
+    "verifier_sha256": "369735631beb030e4516eae834c47148b5b2c8e10e80f18b7a1ec7d0fd4e1e37"
+  },
+  "subg2": {
+    "status": "GATE_IMPLEMENTATION_ONLY",
+    "gate_sha256": "70e1477a9e857c916535f2e739656890cd3ba861081e7b6f92ed40b35a242583",
+    "tests_sha256": "54325f44eb5ce30cc5605983666f4061046960136cc330f46f9f1fed2cdd1d7e",
+    "matrix_sha256": "620289028a7168a1675fd9a2dbe777d2f47c445de1e60256b3ae4d7b807b9d58",
+    "verifier_sha256": "ba5b80c0cefeb80515b86d3808c4d936907c953b28b9e080d0e87aca824f68a3",
+    "approved_candidates": []
+  },
+  "commissioning_scope": {
+    "supported_hosts": [
+      "codex-bright-tide-b56c",
+      "agent-flywheel-ubuntu2404"
+    ],
+    "services_allowed": [],
+    "network_provider_notification_execution": false,
+    "claim": "PARTIAL_SAFE",
+    "fully_commissioned": false
+  }
+}

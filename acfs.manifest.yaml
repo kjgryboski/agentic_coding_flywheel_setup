@@ -24,7 +24,7 @@ modules:
     tags: [critical]
     installed_check:
       run_as: current
-      command: "command -v curl && command -v git && command -v jq"
+      command: "command -v curl && command -v git && command -v update-ca-certificates && command -v unzip && command -v tar && command -v xz && command -v jq && command -v make && command -v gcc && command -v gpg && command -v lsb_release"
     install:
       - apt-get -o DPkg::Lock::Timeout=120 update -y
       - apt-get -o DPkg::Lock::Timeout=120 install -y curl git ca-certificates unzip tar xz-utils jq build-essential gnupg lsb-release

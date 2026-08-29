@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+set -euo pipefail
+shopt -s lastpipe 2>/dev/null || true
+umask 022
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/${BASH_SOURCE[0]##*/}"
+STATE_HOME="${FLYWHEEL_STATE_HOME:-$HOME/.local/share/agent-flywheel}"
+SOURCE_POINTER="$STATE_HOME/source-root"
+VM_NAME="${FLYWHEEL_VM_NAME:-agent-flywheel-ubuntu2404}"
+HEAVY_RUN="${FLYWHEEL_HEAVY_RUN:-$HOME/.local/bin/codex-heavy-run}"
+LIMACTL="${FLYWHEEL_LIMACTL:-$(command -v limactl 2>/dev/null || true)}"
+QUIET=0
+JSON=0
+NO_GUM=0
+TEMP_ROOT=""
+LOCK_DIR=""
+
+cleanup() {
+    if [[ -n "$LOCK_DIR" && -d "$LOCK_DIR" ]]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+    if [[ -n "$TEMP_ROOT" && -d "$TEMP_ROOT" ]]; then
+        rm -rf -- "$TEMP_ROOT"
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  flywheel mac install
+  flywheel start
+  flywheel status [--json]
+  flywheel doctor [--json]
+  flywheel stop
+
+Options:
+  --json       machine-readable status or doctor output
+  --quiet      suppress non-error progress
+  --no-gum     disable optional gum formatting
+  -h, --help   show this help
+
+The Mac command manages the supported Ubuntu VM. Native macOS is not treated
+as an ACFS installation. The current installation scope is PARTIAL_SAFE: eight
+approved modules are installed and all 27 licensing-held modules stay blocked.
+USAGE
+}
+
+info() {
+    ((QUIET == 1)) && return 0
+    if ((NO_GUM == 0)) && command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
+        gum style --foreground 39 "→ $*"
+    else
+        printf '→ %s\n' "$*"
+    fi
+}
+
+ok() {
+    ((QUIET == 1)) && return 0
+    if ((NO_GUM == 0)) && command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
+        gum style --foreground 42 "✓ $*"
+    else
+        printf '✓ %s\n' "$*"
+    fi
+}
+
+die() {
+    printf 'Flywheel: %s\n' "$*" >&2
+    exit 1
+}
+
+source_root() {
+    local self_dir="${SELF%/*}"
+    local candidate="${FLYWHEEL_SOURCE_REPO:-}"
+    if [[ -z "$candidate" && -f "$self_dir/acfs.manifest.yaml" ]]; then
+        candidate="$self_dir"
+    fi
+    if [[ -z "$candidate" && -f "$SOURCE_POINTER" && ! -L "$SOURCE_POINTER" ]]; then
+        IFS= read -r candidate <"$SOURCE_POINTER"
+    fi
+    [[ -n "$candidate" && "$candidate" == /* && -f "$candidate/acfs.manifest.yaml" ]] \
+        || die "cannot locate the ACFS source checkout; set FLYWHEEL_SOURCE_REPO"
+    (cd "$candidate" && pwd -P)
+}
+
+require_mac_tools() {
+    [[ "$(uname -s)" == "Darwin" ]] || die "Mac lifecycle commands require macOS"
+    [[ -n "$LIMACTL" && -x "$LIMACTL" ]] || die "Lima is required (limactl not found)"
+}
+
+vm_status() {
+    "$LIMACTL" list --json | python3 -c '
+import json, sys
+name=sys.argv[1]
+for line in sys.stdin:
+    try: item=json.loads(line)
+    except json.JSONDecodeError: continue
+    if item.get("name") == name:
+        print(item.get("status", "Unknown"))
+        raise SystemExit(0)
+raise SystemExit(3)
+' "$VM_NAME"
+}
+
+ensure_running() {
+    local status=""
+    status="$(vm_status 2>/dev/null || true)"
+    if [[ "$status" == "Running" ]]; then
+        return 0
+    fi
+    [[ -x "$HEAVY_RUN" ]] || die "the Mac heavy-work safety guard is unavailable"
+    info "Starting the Ubuntu Flywheel"
+    "$HEAVY_RUN" --stateful -- "$LIMACTL" start "$VM_NAME"
+}
+
+acquire_install_lock() {
+    local lock_root="$STATE_HOME/locks"
+    mkdir -p "$lock_root"
+    chmod 0700 "$STATE_HOME" "$lock_root"
+    LOCK_DIR="$lock_root/install.lock"
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        die "another Flywheel install is already running"
+    fi
+}
+
+stage_source() {
+    local root="$1"
+    local head="$2"
+    local short="${head:0:12}"
+    local bundle="$TEMP_ROOT/acfs-$short.bundle"
+    local guest_bundle="/var/tmp/agent-flywheel-acfs-$head.bundle"
+    local guest_root="/opt/agent-flywheel-acfs-$head"
+
+    git -C "$root" bundle create "$bundle" HEAD
+    "$LIMACTL" copy --backend=scp "$bundle" "$VM_NAME:$guest_bundle" >/dev/null
+    "$LIMACTL" shell "$VM_NAME" -- bash -lc '
+set -euo pipefail
+guest_bundle="$1"
+guest_root="$2"
+head="$3"
+if [[ ! -d "$guest_root/.git" ]]; then
+    sudo git clone --quiet "$guest_bundle" "$guest_root"
+fi
+test "$(sudo git -C "$guest_root" rev-parse HEAD)" = "$head"+sudo git -C "$guest_root" diff --quiet
+sudo git -C "$guest_root" diff --cached --quiet
+test -z "$(sudo git -C "$guest_root" ls-files --others --exclude-standard)"
+' -- "$guest_bundle" "$guest_root" "$head"
+    printf '%s\n' "$guest_root"
+}
+
+install_command() {
+    require_mac_tools
+    local root=""
+    local head=""
+    local guest_root=""
+    root="$(source_root)"
+    git -C "$root" diff --quiet || die "source checkout has uncommitted changes"
+    git -C "$root" diff --cached --quiet || die "source checkout has staged changes"
+    [[ -z "$(git -C "$root" ls-files --others --exclude-standard)" ]] \
+        || die "source checkout has untracked files"
+    head="$(git -C "$root" rev-parse HEAD)"
+
+    acquire_install_lock
+    TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flywheel-install.XXXXXXXX")"
+    ensure_running
+    info "Staging exact source $head"
+    guest_root="$(stage_source "$root" "$head")"
+    info "Commissioning the eight-module PARTIAL_SAFE profile"
+    "$HEAVY_RUN" --stateful -- "$LIMACTL" shell "$VM_NAME" -- \
+        sudo bash -p "$guest_root/scripts/flywheel-mac-install-guest.sh" "$guest_root"
+
+    mkdir -p "$STATE_HOME" "$HOME/.local/bin"
+    chmod 0700 "$STATE_HOME"
+    printf '%s\n' "$root" >"$SOURCE_POINTER"
+    chmod 0600 "$SOURCE_POINTER"
+    install -m 0755 "$SELF" "$HOME/.local/bin/flywheel"
+    ok "Flywheel is installed on Ubuntu and available as flywheel"
+}
+
+start_command() {
+    require_mac_tools
+    if [[ "$(vm_status 2>/dev/null || true)" == "Running" ]]; then
+        ok "Flywheel is already running"
+    else
+        ensure_running
+        ok "Flywheel is running"
+    fi
+}
+
+status_command() {
+    require_mac_tools
+    local status=""
+    status="$(vm_status 2>/dev/null || true)"
+    [[ -n "$status" ]] || status="Missing"
+    if ((JSON == 1)); then
+        python3 -c 'import json,sys; print(json.dumps({"schema":"agent-flywheel.status/v1","vm":sys.argv[1],"status":sys.argv[2],"claim":"PARTIAL_SAFE"},sort_keys=True,separators=(",",":")))' "$VM_NAME" "$status"
+    else
+        printf 'Flywheel VM: %s\nStatus: %s\nClaim: PARTIAL_SAFE\n' "$VM_NAME" "$status"
+    fi
+    [[ "$status" == "Running" ]]
+}
+
+doctor_command() {
+    require_mac_tools
+    [[ "$(vm_status 2>/dev/null || true)" == "Running" ]] || die "Flywheel is stopped; run flywheel start"
+    local root=""
+    local head=""
+    local guest_root=""
+    local doctor_args=()
+    root="$(source_root)"
+    head="$(git -C "$root" rev-parse HEAD)"
+    guest_root="/opt/agent-flywheel-acfs-$head"
+    ((JSON == 1)) && doctor_args+=(--json)
+    "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
+        HOME=/home/ubuntu \
+        PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin \
+        TARGET_USER=ubuntu \
+        TARGET_HOME=/home/ubuntu \
+        FLYWHEEL_SOURCE_ROOT="$guest_root" \
+        ACFS_PARTIAL_SAFE_ALLOWLIST_FILE=/var/lib/agent-flywheel/doctor-allowlist.json \
+        bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh" "${doctor_args[@]}"
+}
+
+stop_command() {
+    require_mac_tools
+    if [[ "$(vm_status 2>/dev/null || true)" != "Running" ]]; then
+        ok "Flywheel is already stopped"
+        return 0
+    fi
+    info "Stopping the Ubuntu Flywheel cleanly"
+    "$LIMACTL" stop "$VM_NAME"
+    ok "Flywheel is stopped"
+}
+
+command_name="${1:-help}"
+shift || true
+subcommand=""
+if [[ "$command_name" == "mac" ]]; then
+    subcommand="${1:-}"
+    shift || true
+fi
+while (($#)); do
+    case "$1" in
+        --json) JSON=1 ;;
+        --quiet) QUIET=1 ;;
+        --no-gum) NO_GUM=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) die "unknown option: $1" ;;
+    esac
+    shift
+done
+
+case "$command_name:$subcommand" in
+    mac:install) install_command ;;
+    start:) start_command ;;
+    status:) status_command ;;
+    doctor:) doctor_command ;;
+    stop:) stop_command ;;
+    help:|--help:|-h:) usage ;;
+    mac:*) die "usage: flywheel mac install" ;;
+    *) die "unknown command: $command_name" ;;
+esac
