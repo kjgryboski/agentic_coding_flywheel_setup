@@ -784,7 +784,6 @@ acfs_r1_runtime_validate_plan() {
         fi
     done
     ACFS_R1_PLAN_VALIDATED=true
-    export ACFS_R1_PLAN_VALIDATED
     return 0
 }
 

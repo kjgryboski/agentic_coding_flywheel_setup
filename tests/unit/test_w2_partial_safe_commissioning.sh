@@ -130,6 +130,11 @@ if (( BASH_VERSINFO[0] >= 4 )); then
     else
         fail "exact eight-module runtime plan is accepted" "$ACFS_R1_POLICY_REASON"
     fi
+    if export -p | grep -q 'ACFS_R1_PLAN_VALIDATED'; then
+        fail "validated-plan marker remains process-local" "marker was exported without its Bash arrays"
+    else
+        pass "validated-plan marker remains process-local"
+    fi
     ACFS_EFFECTIVE_PLAN+=(stack.mcp_agent_mail)
     if acfs_r1_runtime_validate_plan >/dev/null 2>&1; then
         fail "held plan intersection fails closed" "held plan unexpectedly admitted"
