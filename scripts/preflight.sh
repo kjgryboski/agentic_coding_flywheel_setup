@@ -852,6 +852,68 @@ check_checksum_candidate_file() {
     fi
 }
 
+dns_output_has_address() {
+    local output="${1:-}"
+    local token=""
+
+    # Resolver tools may emit CNAMEs or diagnostic text alongside an answer.
+    # Accept only address-shaped fields so an empty/NXDOMAIN answer cannot pass
+    # merely because the resolver command itself exited successfully.
+    for token in $output; do
+        if [[ "$token" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            return 0
+        fi
+        if [[ "$token" == *:* ]] \
+            && [[ "$token" =~ ^[0-9A-Fa-f:]+(%[A-Za-z0-9_.-]+)?$ ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+dns_host_has_address() {
+    local host_name="${1:-}"
+    local answer=""
+
+    [[ -n "$host_name" ]] || return 1
+
+    # Prefer the libc/NSS path ordinary applications use. If it is present,
+    # its verdict is authoritative; do not mask an NSS failure with a second
+    # resolver implementation.
+    if command -v getent &>/dev/null; then
+        answer="$(getent ahosts "$host_name" 2>/dev/null || true)"
+        dns_output_has_address "$answer"
+        return $?
+    fi
+
+    # Bare `host NAME` also queries MX on some implementations. A host with a
+    # valid A record but no MX then exits nonzero, which is not an address
+    # resolution failure. Query only A/AAAA and require address bytes.
+    if command -v host &>/dev/null; then
+        answer="$(host -t A "$host_name" 2>/dev/null || true)"
+        if dns_output_has_address "$answer"; then
+            return 0
+        fi
+        answer="$(host -t AAAA "$host_name" 2>/dev/null || true)"
+        dns_output_has_address "$answer"
+        return $?
+    fi
+
+    if command -v dig &>/dev/null; then
+        answer="$(dig +short A "$host_name" 2>/dev/null || true)"
+        if dns_output_has_address "$answer"; then
+            return 0
+        fi
+        answer="$(dig +short AAAA "$host_name" 2>/dev/null || true)"
+        dns_output_has_address "$answer"
+        return $?
+    fi
+
+    # Fallback to ping only when no address-query tool exists.
+    ping -c 1 -W 5 "$host_name" >/dev/null 2>&1
+}
+
 check_dns() {
     if [[ "$NETWORK_MODE" == "skip" ]]; then
         warn "DNS: resolution checks skipped" "$(preflight_network_skip_detail)"
@@ -874,28 +936,9 @@ check_dns() {
     local failed_hosts=()
 
     for host in "${test_hosts[@]}"; do
-        # Try multiple DNS resolution methods
-        if command -v host &>/dev/null; then
-            if ! host "$host" >/dev/null 2>&1; then
-                dns_ok=false
-                failed_hosts+=("$host")
-            fi
-        elif command -v dig &>/dev/null; then
-            if ! dig +short "$host" >/dev/null 2>&1; then
-                dns_ok=false
-                failed_hosts+=("$host")
-            fi
-        elif command -v getent &>/dev/null; then
-            if ! getent hosts "$host" >/dev/null 2>&1; then
-                dns_ok=false
-                failed_hosts+=("$host")
-            fi
-        else
-            # Fallback to ping (unreliable but better than nothing)
-            if ! ping -c 1 -W 5 "$host" >/dev/null 2>&1; then
-                dns_ok=false
-                failed_hosts+=("$host")
-            fi
+        if ! dns_host_has_address "$host"; then
+            dns_ok=false
+            failed_hosts+=("$host")
         fi
     done
 

@@ -6,7 +6,7 @@
 # ============================================================
 # Data-only manifest index. Safe to source.
 
-ACFS_MANIFEST_SHA256="b5a1e7eff2c92617c547f0fa6dcf5b4daf04b00edb724e31992c209cc6ea96d8"
+ACFS_MANIFEST_SHA256="51482062efdef94f1dcdc12dc475028747a0d09955c3d9fc5d6e8bb24043ecb3"
 
 ACFS_MODULES_IN_ORDER=(
   "base.system"
@@ -747,14 +747,14 @@ declare -gA ACFS_MODULE_INSTALLED_CHECK=(
   ['cloud.supabase']="command -v supabase"
   ['cloud.vercel']="command -v vercel"
   ['stack.ntm']="command -v ntm"
-  ['stack.mcp_agent_mail']="command -v am"
+  ['stack.mcp_agent_mail']="false"
   ['stack.meta_skill']="command -v ms"
   ['stack.automated_plan_reviser']="command -v apr"
   ['stack.jeffreysprompts']="command -v jfp"
   ['stack.process_triage']="command -v pt"
   ['stack.ultimate_bug_scanner']="command -v ubs"
-  ['stack.beads_rust']="command -v br"
-  ['stack.beads_viewer']="command -v bv"
+  ['stack.beads_rust']="br --version 2>/dev/null | grep -Eq \"(^|[[:space:]])v?0[.]5[.]3([[:space:]]|\$)\""
+  ['stack.beads_viewer']="bv --version 2>/dev/null | grep -Eq \"(^|[[:space:]])v?0[.]22[.]0([[:space:]]|\$)\""
   ['stack.cass']="command -v cass"
   ['stack.cm']="command -v cm"
   ['stack.caam']="command -v caam"

@@ -349,6 +349,83 @@ run_test_3() {
     NO_DEPS=false
 }
 
+# ============================================================
+# Test 4: read-only failures have no persistent/external side effects
+# ============================================================
+run_test_4() {
+    local workdir="$TMPROOT/test4"
+    mkdir -p "$workdir/home"
+
+    eval "$(declare -f acfs_summary_emit | sed '1s/acfs_summary_emit/__real_acfs_summary_emit/')"
+    eval "$(declare -f acfs_performance_budget_emit | sed '1s/acfs_performance_budget_emit/__real_acfs_performance_budget_emit/')"
+
+    local summary_calls=0
+    local webhook_calls=0
+    local notification_calls=0
+    acfs_summary_emit() { summary_calls=$((summary_calls + 1)); }
+    webhook_notify() { webhook_calls=$((webhook_calls + 1)); }
+    acfs_notify_install_failure() { notification_calls=$((notification_calls + 1)); }
+
+    ACFS_BOOTSTRAP_SUPERVISOR=false
+    ACFS_INSTALL_RUN_CONFIRMED=0
+    ACFS_SKILLS_AND_SUMMARY_DONE=0
+    SMOKE_TEST_FAILED=false
+    ACFS_STATE_FILE="$workdir/missing-state.json"
+    ACFS_LOG_FILE=""
+    ACFS_LOG_DIR=""
+
+    local mode_var=""
+    for mode_var in DRY_RUN PRINT_MODE LIST_MODULES PRINT_PLAN_MODE; do
+        DRY_RUN=false
+        PRINT_MODE=false
+        LIST_MODULES=false
+        PRINT_PLAN_MODE=false
+        printf -v "$mode_var" '%s' true
+        summary_calls=0
+        webhook_calls=0
+        notification_calls=0
+
+        false || cleanup
+
+        assert "E.${mode_var}. failure summary suppressed" "$([[ $summary_calls -eq 0 ]] && echo true || echo false)"
+        assert "E.${mode_var}. webhook suppressed" "$([[ $webhook_calls -eq 0 ]] && echo true || echo false)"
+        assert "E.${mode_var}. notification suppressed" "$([[ $notification_calls -eq 0 ]] && echo true || echo false)"
+    done
+
+    DRY_RUN=false
+    PRINT_MODE=false
+    LIST_MODULES=false
+    PRINT_PLAN_MODE=false
+    summary_calls=0
+    webhook_calls=0
+    notification_calls=0
+    false || cleanup
+    assert "E.mutating. failure summary retained" "$([[ $summary_calls -eq 1 ]] && echo true || echo false)"
+    assert "E.mutating. webhook retained" "$([[ $webhook_calls -eq 1 ]] && echo true || echo false)"
+    assert "E.mutating. notification retained" "$([[ $notification_calls -eq 1 ]] && echo true || echo false)"
+
+    eval "$(declare -f __real_acfs_summary_emit | sed '1s/__real_acfs_summary_emit/acfs_summary_emit/')"
+    eval "$(declare -f __real_acfs_performance_budget_emit | sed '1s/__real_acfs_performance_budget_emit/acfs_performance_budget_emit/')"
+
+    TARGET_USER="$(id -un)"
+    TARGET_HOME="$workdir/home"
+    ACFS_HOME="$workdir/read-only-home/.acfs"
+    DRY_RUN=true
+    acfs_summary_emit "failure" 0
+    acfs_performance_budget_emit "$workdir/nonexistent-summary.json"
+    assert "E.read-only. summary/budget guard creates no ACFS home" "$([[ ! -e "$ACFS_HOME" ]] && echo true || echo false)"
+
+    ACFS_HOME="$workdir/mutating-home/.acfs"
+    DRY_RUN=false
+    acfs_summary_emit "failure" 0
+    local summary_count=0
+    local budget_count=0
+    summary_count=$(find "$ACFS_HOME/logs" -type f -name 'install_summary_*.json' 2>/dev/null | wc -l | tr -d ' ')
+    budget_count=$(find "$ACFS_HOME/logs" -type f -name 'performance_budget_*.json' 2>/dev/null | wc -l | tr -d ' ')
+    assert "E.mutating. real failure summary persists" "$([[ $summary_count -eq 1 ]] && echo true || echo false)"
+    assert "E.mutating. real performance budget persists" "$([[ $budget_count -eq 1 ]] && echo true || echo false)"
+}
+
 main() {
     command -v timeout >/dev/null 2>&1 || { echo "timeout(1) is required for this test"; exit 1; }
 
@@ -362,6 +439,10 @@ main() {
     echo
     echo "== Test 3: success reporting and resume selection stay truthful =="
     run_test_3
+
+    echo
+    echo "== Test 4: read-only failure side effects are suppressed =="
+    run_test_4
 
     echo
     echo "=============================================="

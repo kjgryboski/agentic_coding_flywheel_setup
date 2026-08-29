@@ -1289,6 +1289,13 @@ acfs_log_close() {
 acfs_performance_budget_emit() {
     local summary_file="$1"
 
+    # Read-only invocations are a zero-persistence contract, including failure
+    # paths. Keep this guard here as defense in depth for future direct callers.
+    if declare -F acfs_is_read_only_mode >/dev/null 2>&1 \
+        && acfs_is_read_only_mode; then
+        return 0
+    fi
+
     command -v jq &>/dev/null || return 0
     [[ -f "$summary_file" ]] || return 0
 
@@ -1397,6 +1404,13 @@ acfs_performance_budget_emit() {
 acfs_summary_emit() {
     local status="$1"
     local total_seconds="${2:-0}"
+
+    # A failed preview must not create ~/.acfs/logs or a derived performance
+    # budget. The EXIT trap has the same guard, but this protects every caller.
+    if declare -F acfs_is_read_only_mode >/dev/null 2>&1 \
+        && acfs_is_read_only_mode; then
+        return 0
+    fi
 
     # Require jq (installed by ensure_base_deps before phases run)
     command -v jq &>/dev/null || return 1
@@ -2122,15 +2136,21 @@ cleanup() {
         fi
         print_resume_hint "${failed_phase:-}" "${failed_step:-}"
         log_error ""
-        # Emit failure summary (best-effort)
-        acfs_summary_emit "failure" 0 2>/dev/null || true
-        # Send webhook notification for failure (bd-2zqr)
-        if type -t webhook_notify &>/dev/null; then
-            webhook_notify "failure" "${ACFS_SUMMARY_FILE:-}" 2>/dev/null || true
-        fi
-        # Send ntfy.sh notification for failure (bd-2igt6)
-        if type -t acfs_notify_install_failure &>/dev/null; then
-            acfs_notify_install_failure 2>/dev/null || true
+        # Read-only modes preserve the failing exit and terminal diagnostics,
+        # but must not persist receipts or contact notification endpoints. If
+        # the predicate is unavailable during an unusually early mutating
+        # failure, retain the historical best-effort failure receipt.
+        if ! declare -F acfs_is_read_only_mode >/dev/null 2>&1 \
+            || ! acfs_is_read_only_mode; then
+            acfs_summary_emit "failure" 0 2>/dev/null || true
+            # Send webhook notification for failure (bd-2zqr)
+            if type -t webhook_notify &>/dev/null; then
+                webhook_notify "failure" "${ACFS_SUMMARY_FILE:-}" 2>/dev/null || true
+            fi
+            # Send ntfy.sh notification for failure (bd-2igt6)
+            if type -t acfs_notify_install_failure &>/dev/null; then
+                acfs_notify_install_failure 2>/dev/null || true
+            fi
         fi
     fi
 
@@ -2609,8 +2629,15 @@ EOF
 # ============================================================
 # Utility functions
 # ============================================================
+acfs_is_read_only_mode() {
+    [[ "${DRY_RUN:-false}" == "true" ]] \
+        || [[ "${PRINT_MODE:-false}" == "true" ]] \
+        || [[ "${LIST_MODULES:-false}" == "true" ]] \
+        || [[ "${PRINT_PLAN_MODE:-false}" == "true" ]]
+}
+
 normalize_read_only_modes() {
-    if [[ "${DRY_RUN:-false}" != "true" ]] && [[ "${PRINT_MODE:-false}" != "true" ]]; then
+    if ! acfs_is_read_only_mode; then
         return 0
     fi
 
@@ -9826,13 +9853,11 @@ UNIT_EOF
         try_step "Installing Beads Rust" acfs_run_verified_upstream_script_as_target "br" "bash" || log_warn "Beads Rust installation may have failed"
     fi
 
-    # Beads Viewer
-    if binary_installed "bv"; then
-        log_detail "Beads Viewer already installed"
-    else
-        log_detail "Installing Beads Viewer"
-        try_step "Installing Beads Viewer" acfs_run_verified_upstream_script_as_target "bv" "bash" || log_warn "Beads Viewer installation may have failed"
-    fi
+    # Beads Viewer is deliberately unavailable through the legacy stack path.
+    # Its upstream installer resolves a mutable latest release, so the only
+    # admitted path is the manifest-generated content-addressed v0.22.0 module.
+    log_error "Beads Viewer requires generated module stack.beads_viewer; refusing the legacy installer path"
+    return 1
 
     # CASS (Coding Agent Session Search)
     if binary_installed "cass"; then

@@ -476,6 +476,17 @@ acfs_generated_install_stack_mcp_agent_mail() {
     log_step "Installing stack.mcp_agent_mail"
 
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
+        log_info "dry-run: pre-install check: false (target_user)"
+    else
+        if ! run_as_target_shell <<'INSTALL_STACK_MCP_AGENT_MAIL_PRE_INSTALL_CHECK'
+false
+INSTALL_STACK_MCP_AGENT_MAIL_PRE_INSTALL_CHECK
+        then
+            log_error "stack.mcp_agent_mail: C4 commissioning HOLD: published Agent Mail binaries are forbidden; exact-source build inputs and substrate package identities are not frozen"
+            return 1
+        fi
+    fi
+    if [[ "${DRY_RUN:-false}" = "true" ]]; then
         log_info "dry-run: verified installer: stack.mcp_agent_mail"
     else
         if ! {
@@ -518,7 +529,7 @@ acfs_generated_install_stack_mcp_agent_mail() {
                         elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
                             log_error "stack.mcp_agent_mail: failed to make verified installer staging file read-only"
                             ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'env' 'AM_INSTALL_SKIP_MCP_SETUP=1' 'AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1' 'bash' "$verified_installer_file" '--dest' "$TARGET_HOME"'/mcp_agent_mail' '--yes'; then
+                        elif run_as_target_runner 'env' 'AM_INSTALL_SKIP_MCP_SETUP=1' 'AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1' 'bash' "$verified_installer_file" '--version' 'v0.3.30' '--dest' "$TARGET_HOME"'/mcp_agent_mail' '--artifact-url' 'https://github.com/Dicklesworthstone/mcp_agent_mail_rust/releases/download/v0.3.30/mcp-agent-mail-aarch64-unknown-linux-gnu.tar.xz' '--checksum' '1ee708cfe0be9ef9bbb272e2358da79d0ae818ffdfce0b9446df5eb2337f5963' '--no-service' '--yes'; then
                             install_success=true
                         else
                             log_error "stack.mcp_agent_mail: verified installer execution failed"
@@ -1665,7 +1676,7 @@ acfs_generated_install_stack_beads_rust() {
                         elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
                             log_error "stack.beads_rust: failed to make verified installer staging file read-only"
                             ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'bash' "$verified_installer_file"; then
+                        elif run_as_target_runner 'bash' "$verified_installer_file" '--version' 'v0.5.3' '--dest' "$TARGET_HOME"'/.local/bin' '--artifact-url' 'https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz' '--checksum' '9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb'; then
                             install_success=true
                         else
                             log_error "stack.beads_rust: verified installer execution failed"
@@ -1709,13 +1720,13 @@ acfs_generated_install_stack_beads_rust() {
 
     # Verify
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: verify: br --version (target_user)"
+        log_info "dry-run: verify: br --version | grep -Eq '(^|[[:space:]])v?0[.]5[.]3([[:space:]]|\$)' (target_user)"
     else
         if ! run_as_target_shell <<'INSTALL_STACK_BEADS_RUST'
-br --version
+br --version | grep -Eq '(^|[[:space:]])v?0[.]5[.]3([[:space:]]|$)'
 INSTALL_STACK_BEADS_RUST
         then
-            log_error "stack.beads_rust: verify failed: br --version"
+            log_error "stack.beads_rust: verify failed: br --version | grep -Eq '(^|[[:space:]])v?0[.]5[.]3([[:space:]]|\$)'"
             return 1
         fi
     fi
@@ -1745,99 +1756,164 @@ acfs_generated_install_stack_beads_viewer() {
     log_step "Installing stack.beads_viewer"
 
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: verified installer: stack.beads_viewer"
+        log_info "dry-run: install: install content-addressed bv v0.22.0 for Linux ARM64 (target_user)"
     else
-        if ! {
-            # Try security-verified install (no unverified fallback; fail closed)
-            local install_success=false
-            local verified_installer_file=""
-            local verified_installer_chmod_bin=""
+        if ! run_as_target_shell <<'INSTALL_STACK_BEADS_VIEWER'
+# acfs-summary: install content-addressed bv v0.22.0 for Linux ARM64
+set -euo pipefail
+umask 077
 
-                # Cleared per attempt so a stale reason from an earlier module can
-                # never be misattributed to this one.
-                ACFS_LAST_MODULE_FAILURE_REASON=""
-            if acfs_security_init; then
-                local known_installers_decl=""
-                # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
-                known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
-                if [[ "$known_installers_decl" == declare\ -A* ]]; then
-                    local tool="bv"
-                    local url=""
-                    local expected_sha256=""
+bv_url="https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz"
+bv_archive_sha256="23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89"
+bv_binary_sha256="ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320"
+bv_archive=""
+bv_binary=""
+bv_stage=""
+bv_link_stage_dir=""
+bv_link_stage=""
 
-                    # Safe access with explicit empty default
-                    url="${KNOWN_INSTALLERS[$tool]:-}"
-                    if ! expected_sha256="$(get_checksum "$tool")"; then
-                        log_error "stack.beads_viewer: get_checksum failed for tool '$tool'"
-                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        expected_sha256=""
-                    fi
+cleanup_bv_pinned_install() {
+  if [[ -n "$bv_archive" ]]; then
+    /usr/bin/rm -f -- "$bv_archive"
+  fi
+  if [[ -n "$bv_binary" ]]; then
+    /usr/bin/rm -f -- "$bv_binary"
+  fi
+  if [[ -n "$bv_stage" ]]; then
+    /usr/bin/rm -f -- "$bv_stage"
+  fi
+  if [[ -n "$bv_link_stage" ]]; then
+    /usr/bin/rm -f -- "$bv_link_stage"
+  fi
+  if [[ -n "$bv_link_stage_dir" ]]; then
+    /usr/bin/rmdir -- "$bv_link_stage_dir" 2>/dev/null || true
+  fi
+}
 
-                    if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
-                        if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
-                            log_error "stack.beads_viewer: failed to create verified installer staging file"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                            verified_installer_file=""
-                        elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
-                            log_error "stack.beads_viewer: installer verification failed"
-                            : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
-                        elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
-                            log_error "stack.beads_viewer: trusted chmod not found for verified installer staging"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
-                            log_error "stack.beads_viewer: failed to make verified installer staging file read-only"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'bash' "$verified_installer_file"; then
-                            install_success=true
-                        else
-                            log_error "stack.beads_viewer: verified installer execution failed"
-                            ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
-                        fi
-                    else
-                        if [[ -z "$url" ]]; then
-                            log_error "stack.beads_viewer: KNOWN_INSTALLERS[$tool] not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                        if [[ -z "$expected_sha256" ]]; then
-                            log_error "stack.beads_viewer: checksum for '$tool' not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                    fi
-                else
-                    log_error "stack.beads_viewer: KNOWN_INSTALLERS array not available"
-                    ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                fi
-            else
-                log_error "stack.beads_viewer: acfs_security_init failed - check security.sh and checksums.yaml"
-                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-            fi
-            if [[ -n "$verified_installer_file" ]]; then
-                _acfs_remove_temp_files "$verified_installer_file"
-                verified_installer_file=""
-            fi
+for required_binary in /usr/bin/curl /usr/bin/tar /usr/bin/sha256sum /usr/bin/awk /usr/bin/install /usr/bin/ln /usr/bin/mkdir /usr/bin/mktemp /usr/bin/mv /usr/bin/readlink /usr/bin/rm /usr/bin/rmdir /usr/bin/uname; do
+  if [[ ! -x "$required_binary" ]]; then
+    echo "Required trusted binary is unavailable: $required_binary" >&2
+    exit 1
+  fi
+done
 
-            # Verified install is required - no fallback
-            if [[ "$install_success" = "true" ]]; then
-                true
-            else
-                log_error "Verified install failed for stack.beads_viewer"
-                false
-            fi
-        }; then
-            log_error "stack.beads_viewer: verified installer failed"
+if [[ "$(/usr/bin/uname -s)" != "Linux" ]] \
+  || { [[ "$(/usr/bin/uname -m)" != "aarch64" ]] && [[ "$(/usr/bin/uname -m)" != "arm64" ]]; }; then
+  echo "bv v0.22.0 candidate supports only Linux ARM64" >&2
+  exit 1
+fi
+
+bv_archive="$(/usr/bin/mktemp "/tmp/acfs-bv-v0.22.0.XXXXXX.tar.gz")"
+bv_binary="$(/usr/bin/mktemp "/tmp/acfs-bv-v0.22.0.XXXXXX.bin")"
+trap cleanup_bv_pinned_install EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+/usr/bin/curl -q --fail --location --silent --show-error \
+  --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  --retry 3 --connect-timeout 15 --max-time 300 \
+  --user-agent 'OpenAI File Downloader, XaiImageApiFetch/1.0' \
+  --output "$bv_archive" "$bv_url"
+
+bv_actual_archive_sha256="$(/usr/bin/sha256sum "$bv_archive" | /usr/bin/awk '{print $1}')"
+if [[ "$bv_actual_archive_sha256" != "$bv_archive_sha256" ]]; then
+  echo "bv v0.22.0 archive checksum mismatch" >&2
+  exit 1
+fi
+
+bv_member_count="$(/usr/bin/tar -tzf "$bv_archive" | /usr/bin/awk '$0 == "bv" { count += 1 } END { print count + 0 }')"
+bv_member_listing="$(/usr/bin/tar -tvzf "$bv_archive" bv)"
+if [[ "$bv_member_count" != "1" ]] || [[ "$bv_member_listing" != -* ]]; then
+  echo "bv v0.22.0 archive does not contain one regular bv member" >&2
+  exit 1
+fi
+
+/usr/bin/tar -xOzf "$bv_archive" bv > "$bv_binary"
+bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_binary" | /usr/bin/awk '{print $1}')"
+if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
+  echo "bv v0.22.0 binary checksum mismatch" >&2
+  exit 1
+fi
+
+bv_version_dir="$HOME/.local/lib/acfs/bv/v0.22.0"
+bv_versioned_target="$bv_version_dir/bv"
+bv_public_dir="$HOME/.local/bin"
+bv_public_target="$bv_public_dir/bv"
+
+for bv_target_dir in \
+  "$HOME/.local" \
+  "$HOME/.local/lib" \
+  "$HOME/.local/lib/acfs" \
+  "$HOME/.local/lib/acfs/bv" \
+  "$bv_version_dir" \
+  "$bv_public_dir"
+do
+  if [[ -L "$bv_target_dir" ]]; then
+    echo "Refusing bv install through a symlinked target directory: $bv_target_dir" >&2
+    exit 1
+  fi
+done
+/usr/bin/mkdir -p "$bv_version_dir" "$bv_public_dir"
+
+if [[ -L "$bv_versioned_target" ]] || { [[ -e "$bv_versioned_target" ]] && [[ ! -f "$bv_versioned_target" ]]; }; then
+  echo "Refusing to replace unsafe versioned bv target: $bv_versioned_target" >&2
+  exit 1
+fi
+if [[ -L "$bv_public_target" ]] || { [[ -e "$bv_public_target" ]] && [[ ! -f "$bv_public_target" ]]; }; then
+  echo "Refusing to replace unsafe public bv target: $bv_public_target" >&2
+  exit 1
+fi
+
+bv_stage="$(/usr/bin/mktemp "$bv_version_dir/.bv-v0.22.0.XXXXXX")"
+/usr/bin/install -m 0755 "$bv_binary" "$bv_stage"
+bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_stage" | /usr/bin/awk '{print $1}')"
+if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
+  echo "Staged bv v0.22.0 binary checksum mismatch" >&2
+  exit 1
+fi
+/usr/bin/mv -f -- "$bv_stage" "$bv_versioned_target"
+bv_stage=""
+
+bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_versioned_target" | /usr/bin/awk '{print $1}')"
+if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
+  echo "Installed versioned bv v0.22.0 binary checksum mismatch" >&2
+  exit 1
+fi
+
+bv_link_stage_dir="$(/usr/bin/mktemp -d "$bv_public_dir/.bv-link-stage.XXXXXX")"
+bv_link_stage="$bv_link_stage_dir/bv"
+/usr/bin/ln -s "$bv_versioned_target" "$bv_link_stage"
+/usr/bin/mv -f -- "$bv_link_stage" "$bv_public_target"
+bv_link_stage=""
+/usr/bin/rmdir -- "$bv_link_stage_dir"
+bv_link_stage_dir=""
+
+if [[ "$(/usr/bin/readlink "$bv_public_target")" != "$bv_versioned_target" ]]; then
+  echo "Public bv command does not reference the admitted versioned binary" >&2
+  exit 1
+fi
+bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_public_target" | /usr/bin/awk '{print $1}')"
+if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
+  echo "Public bv command checksum mismatch" >&2
+  exit 1
+fi
+INSTALL_STACK_BEADS_VIEWER
+        then
+            log_error "stack.beads_viewer: install command failed: install content-addressed bv v0.22.0 for Linux ARM64"
             return 1
         fi
     fi
 
     # Verify
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: verify: bv --help || bv --version (target_user)"
+        log_info "dry-run: verify: bv --version | grep -Eq '(^|[[:space:]])v?0[.]22[.]0([[:space:]]|\$)' (target_user)"
     else
         if ! run_as_target_shell <<'INSTALL_STACK_BEADS_VIEWER'
-bv --help || bv --version
+bv --version | grep -Eq '(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)'
 INSTALL_STACK_BEADS_VIEWER
         then
-            log_error "stack.beads_viewer: verify failed: bv --help || bv --version"
+            log_error "stack.beads_viewer: verify failed: bv --version | grep -Eq '(^|[[:space:]])v?0[.]22[.]0([[:space:]]|\$)'"
             return 1
         fi
     fi

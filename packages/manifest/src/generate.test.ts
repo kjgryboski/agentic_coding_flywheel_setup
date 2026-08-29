@@ -419,11 +419,35 @@ describe('Generated verified installer args', () => {
     expect(stackContent).toContain("'AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1'");
   });
 
-  test('stack.mcp_agent_mail writes an explicit managed no-auth service instead of tmux', () => {
+  test('stack.mcp_agent_mail fails closed on the C4 hold before comparison installer or legacy service code', () => {
     const stackPath = resolve(GENERATED_DIR, 'install_stack.sh');
     expect(existsSync(stackPath)).toBe(true);
     const stackContent = readFileSync(stackPath, 'utf-8');
+    const functionStart = stackContent.indexOf('acfs_generated_install_stack_mcp_agent_mail() {');
+    const functionEnd = stackContent.indexOf('acfs_generated_install_stack_meta_skill() {', functionStart);
+    const agentMailFunction = stackContent.slice(functionStart, functionEnd);
+    const holdIndex = agentMailFunction.indexOf('C4 commissioning HOLD: published Agent Mail binaries are forbidden');
+    const installerIndex = agentMailFunction.indexOf('# Try security-verified install');
+    const legacyServiceIndex = agentMailFunction.indexOf('cat > "$unit_file" <<UNIT_EOF');
 
+    expect(functionStart).toBeGreaterThanOrEqual(0);
+    expect(functionEnd).toBeGreaterThan(functionStart);
+    expect(holdIndex).toBeGreaterThanOrEqual(0);
+    expect(installerIndex).toBeGreaterThan(holdIndex);
+    expect(legacyServiceIndex).toBeGreaterThan(holdIndex);
+    expect(agentMailFunction).toContain('return 1');
+    expect(agentMailFunction).toContain("'--version' 'v0.3.30'");
+    expect(agentMailFunction).toContain("'--no-service'");
+    expect(agentMailFunction).toContain(
+      'mcp-agent-mail-aarch64-unknown-linux-gnu.tar.xz'
+    );
+    expect(agentMailFunction).toContain(
+      '1ee708cfe0be9ef9bbb272e2358da79d0ae818ffdfce0b9446df5eb2337f5963'
+    );
+
+    // This legacy block is retained only as unreachable hand-off context. C4
+    // requires it to be replaced with a custom EnvironmentFile/UMask unit
+    // after exact-source build admission; it is not an enabled candidate path.
     expect(stackContent).toContain('cat > "$unit_file" <<UNIT_EOF');
     expect(stackContent).toContain('systemd_unit_path_escape() {');
     expect(stackContent).toContain('value="${value//%/%%}"');
@@ -446,6 +470,61 @@ describe('Generated verified installer args', () => {
     expect(stackContent).toContain('max_wait=240');
     expect(stackContent).not.toContain('am service install >/dev/null');
     expect(stackContent).not.toContain('tmux new-session -d -s "$tmux_session"');
+  });
+
+  test('core commissioning modules bind immutable br/bv inputs and never resolve bv latest', () => {
+    const parseResult = parseManifestFile(MANIFEST_PATH);
+    expect(parseResult.success).toBe(true);
+    if (!parseResult.success || !parseResult.data) {
+      throw new Error(`Failed to parse manifest: ${parseResult.error?.message}`);
+    }
+
+    const agentMail = parseResult.data.modules.find((module) => module.id === 'stack.mcp_agent_mail');
+    const br = parseResult.data.modules.find((module) => module.id === 'stack.beads_rust');
+    const bv = parseResult.data.modules.find((module) => module.id === 'stack.beads_viewer');
+    expect(agentMail?.verified_installer?.url).toBe(
+      'https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail_rust/d4827f1cc17df77b4059c962a5ccbadba063e8de/install.sh'
+    );
+    expect(agentMail?.pre_install_check?.command).toBe('false');
+    expect(agentMail?.notes).toContain('independent_review_status=HOLD');
+    expect(agentMail?.notes).toContain(
+      'p0_auth_blocker=empty or absent bearer token can disable authentication'
+    );
+    expect(agentMail?.notes).toContain(
+      'substrate_blocker=qualified target is Ubuntu 24.04 LTS while the C4 design assumes Ubuntu 26.04'
+    );
+    expect(br?.verified_installer?.url).toBe(
+      'https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh'
+    );
+    expect(br?.verified_installer?.args).toContain('v0.5.3');
+    expect(br?.verified_installer?.args).toContain(
+      '9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb'
+    );
+    expect(bv?.verified_installer).toBeUndefined();
+    expect(bv?.notes).toContain(
+      'comparison_installer_raw_sha256=46b6c8a3c90e59b249a8475aa0fea9dbec97527eba0f57aa779d509cc9140270'
+    );
+
+    const stackContent = readFileSync(resolve(GENERATED_DIR, 'install_stack.sh'), 'utf-8');
+    const bvStart = stackContent.indexOf('acfs_generated_install_stack_beads_viewer() {');
+    const bvEnd = stackContent.indexOf('acfs_generated_install_stack_cass() {', bvStart);
+    const bvFunction = stackContent.slice(bvStart, bvEnd);
+    expect(bvStart).toBeGreaterThanOrEqual(0);
+    expect(bvEnd).toBeGreaterThan(bvStart);
+    expect(bvFunction).toContain(
+      'https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz'
+    );
+    expect(bvFunction).toContain(
+      '23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89'
+    );
+    expect(bvFunction).toContain(
+      'ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320'
+    );
+    expect(bvFunction).toContain('$HOME/.local/lib/acfs/bv/v0.22.0');
+    expect(bvFunction).toContain('/usr/bin/ln -s "$bv_versioned_target" "$bv_link_stage"');
+    expect(bvFunction).toContain('/usr/bin/readlink "$bv_public_target"');
+    expect(bvFunction).not.toContain('releases/latest');
+    expect(bvFunction).not.toContain('# Try security-verified install');
   });
 
   test('stack.ru passes RU_NON_INTERACTIVE via env in generated installer', () => {

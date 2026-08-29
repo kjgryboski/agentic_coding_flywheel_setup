@@ -1681,12 +1681,17 @@ modules:
       - lang.uv
     installed_check:
       run_as: target_user
-      command: "command -v am"
+      command: "false"
+    pre_install_check:
+      run_as: target_user
+      command: "false"
+      skip_message: "C4 commissioning HOLD: published Agent Mail binaries are forbidden; exact-source build inputs and substrate package identities are not frozen"
     verified_installer:
       tool: mcp_agent_mail
       runner: bash
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail_rust/d4827f1cc17df77b4059c962a5ccbadba063e8de/install.sh"
       env: ["AM_INSTALL_SKIP_MCP_SETUP=1", "AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1"]
-      args: ["--dest", "$TARGET_HOME/mcp_agent_mail", "--yes"]
+      args: ["--version", "v0.3.30", "--dest", "$TARGET_HOME/mcp_agent_mail", "--artifact-url", "https://github.com/Dicklesworthstone/mcp_agent_mail_rust/releases/download/v0.3.30/mcp-agent-mail-aarch64-unknown-linux-gnu.tar.xz", "--checksum", "1ee708cfe0be9ef9bbb272e2358da79d0ae818ffdfce0b9446df5eb2337f5963", "--no-service", "--yes"]
     install:
       - |
           if ! command -v am >/dev/null 2>&1; then
@@ -2053,11 +2058,20 @@ modules:
           agent_mail_service_curl -fsS --max-time 10 http://127.0.0.1:8765/health/liveness >/dev/null
           agent_mail_readiness_ready
     notes:
-      - "Runs the upstream installer with ACFS-owned MCP setup/readiness skips, then writes a managed local service on port 8765"
-      - "Port 127.0.0.1:8765 belongs to the Agent Mail service; cm serve (CASS Memory) defaults to the same port and must be started with --port (e.g. 8766) on an ACFS machine"
-      - "Managed service pins storage, database, and MCP path under ~/.mcp_agent_mail_git_mailbox_repo"
-      - "If a user systemd manager is available, verification requires agent-mail.service to be active"
-      - "Server liveness and readiness are verified after install"
+      - "commissioning_status=HOLD"
+      - "runtime_source_commit=54ecf25576affaf2298edd72d0d985daafead18c"
+      - "runtime_source_tree=dd5694911cd6a122f19252861dd09ecbd2967692"
+      - "comparison_archive_sha256=1ee708cfe0be9ef9bbb272e2358da79d0ae818ffdfce0b9446df5eb2337f5963"
+      - "published_binary_install=FORBIDDEN"
+      - "source_build_input_lock=PENDING"
+      - "native_or_acfs_service_generator=FORBIDDEN"
+      - "required_service_contract=custom EnvironmentFile, UMask=0077, exact owner-only state roots, authenticated guest-loopback, proof/nonce gates, no fallback, no purge"
+      - "design_reference=C4-rust-agent-mail-hardening-design.md sha256:0ec1f6fbccae5a349a9b7e166261ecb5a2805e9c047cd1eda032a82d54b12ea4"
+      - "independent_review_status=HOLD"
+      - "p0_auth_blocker=empty or absent bearer token can disable authentication"
+      - "p0_state_blocker=am serve-http can self-heal database state and enter systemd standby/reuse instead of failing closed"
+      - "substrate_blocker=qualified target is Ubuntu 24.04 LTS while the C4 design assumes Ubuntu 26.04"
+      - "The legacy generated service block remains unreachable behind this mandatory HOLD and must be replaced, not enabled, by the exact-source C4 follow-up"
 
   - id: stack.meta_skill
     description: Local-first knowledge management with hybrid semantic search (ms)
@@ -2305,15 +2319,21 @@ modules:
       - lang.rust
     installed_check:
       run_as: target_user
-      command: "command -v br"
+      command: 'br --version 2>/dev/null | grep -Eq "(^|[[:space:]])v?0[.]5[.]3([[:space:]]|$)"'
     verified_installer:
       tool: br
       runner: bash
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh"
+      args: ["--version", "v0.5.3", "--dest", "$TARGET_HOME/.local/bin", "--artifact-url", "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz", "--checksum", "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"]
     install: []
     verify:
-      - br --version
+      - br --version | grep -Eq '(^|[[:space:]])v?0[.]5[.]3([[:space:]]|$)'
       - br list --json 2>/dev/null || true
+    notes:
+      - "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7"
+      - "source_tree=32e7fb93ca00ee16a72471e0304f119b8d893f97"
+      - "linux_arm64_archive_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"
+      - "linux_arm64_binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
 
   - id: stack.beads_viewer
     description: bv TUI for Beads tasks
@@ -2349,13 +2369,159 @@ modules:
       - stack.beads_rust
     installed_check:
       run_as: target_user
-      command: "command -v bv"
-    verified_installer:
-      tool: bv
-      runner: bash
-    install: []
+      command: 'bv --version 2>/dev/null | grep -Eq "(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)"'
+    install:
+      - |
+          # acfs-summary: install content-addressed bv v0.22.0 for Linux ARM64
+          set -euo pipefail
+          umask 077
+
+          bv_url="https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz"
+          bv_archive_sha256="23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89"
+          bv_binary_sha256="ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320"
+          bv_archive=""
+          bv_binary=""
+          bv_stage=""
+          bv_link_stage_dir=""
+          bv_link_stage=""
+
+          cleanup_bv_pinned_install() {
+            if [[ -n "$bv_archive" ]]; then
+              /usr/bin/rm -f -- "$bv_archive"
+            fi
+            if [[ -n "$bv_binary" ]]; then
+              /usr/bin/rm -f -- "$bv_binary"
+            fi
+            if [[ -n "$bv_stage" ]]; then
+              /usr/bin/rm -f -- "$bv_stage"
+            fi
+            if [[ -n "$bv_link_stage" ]]; then
+              /usr/bin/rm -f -- "$bv_link_stage"
+            fi
+            if [[ -n "$bv_link_stage_dir" ]]; then
+              /usr/bin/rmdir -- "$bv_link_stage_dir" 2>/dev/null || true
+            fi
+          }
+
+          for required_binary in /usr/bin/curl /usr/bin/tar /usr/bin/sha256sum /usr/bin/awk /usr/bin/install /usr/bin/ln /usr/bin/mkdir /usr/bin/mktemp /usr/bin/mv /usr/bin/readlink /usr/bin/rm /usr/bin/rmdir /usr/bin/uname; do
+            if [[ ! -x "$required_binary" ]]; then
+              echo "Required trusted binary is unavailable: $required_binary" >&2
+              exit 1
+            fi
+          done
+
+          if [[ "$(/usr/bin/uname -s)" != "Linux" ]] \
+            || { [[ "$(/usr/bin/uname -m)" != "aarch64" ]] && [[ "$(/usr/bin/uname -m)" != "arm64" ]]; }; then
+            echo "bv v0.22.0 candidate supports only Linux ARM64" >&2
+            exit 1
+          fi
+
+          bv_archive="$(/usr/bin/mktemp "/tmp/acfs-bv-v0.22.0.XXXXXX.tar.gz")"
+          bv_binary="$(/usr/bin/mktemp "/tmp/acfs-bv-v0.22.0.XXXXXX.bin")"
+          trap cleanup_bv_pinned_install EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          /usr/bin/curl -q --fail --location --silent --show-error \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --connect-timeout 15 --max-time 300 \
+            --user-agent 'OpenAI File Downloader, XaiImageApiFetch/1.0' \
+            --output "$bv_archive" "$bv_url"
+
+          bv_actual_archive_sha256="$(/usr/bin/sha256sum "$bv_archive" | /usr/bin/awk '{print $1}')"
+          if [[ "$bv_actual_archive_sha256" != "$bv_archive_sha256" ]]; then
+            echo "bv v0.22.0 archive checksum mismatch" >&2
+            exit 1
+          fi
+
+          bv_member_count="$(/usr/bin/tar -tzf "$bv_archive" | /usr/bin/awk '$0 == "bv" { count += 1 } END { print count + 0 }')"
+          bv_member_listing="$(/usr/bin/tar -tvzf "$bv_archive" bv)"
+          if [[ "$bv_member_count" != "1" ]] || [[ "$bv_member_listing" != -* ]]; then
+            echo "bv v0.22.0 archive does not contain one regular bv member" >&2
+            exit 1
+          fi
+
+          /usr/bin/tar -xOzf "$bv_archive" bv > "$bv_binary"
+          bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_binary" | /usr/bin/awk '{print $1}')"
+          if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
+            echo "bv v0.22.0 binary checksum mismatch" >&2
+            exit 1
+          fi
+
+          bv_version_dir="$HOME/.local/lib/acfs/bv/v0.22.0"
+          bv_versioned_target="$bv_version_dir/bv"
+          bv_public_dir="$HOME/.local/bin"
+          bv_public_target="$bv_public_dir/bv"
+
+          for bv_target_dir in \
+            "$HOME/.local" \
+            "$HOME/.local/lib" \
+            "$HOME/.local/lib/acfs" \
+            "$HOME/.local/lib/acfs/bv" \
+            "$bv_version_dir" \
+            "$bv_public_dir"
+          do
+            if [[ -L "$bv_target_dir" ]]; then
+              echo "Refusing bv install through a symlinked target directory: $bv_target_dir" >&2
+              exit 1
+            fi
+          done
+          /usr/bin/mkdir -p "$bv_version_dir" "$bv_public_dir"
+
+          if [[ -L "$bv_versioned_target" ]] || { [[ -e "$bv_versioned_target" ]] && [[ ! -f "$bv_versioned_target" ]]; }; then
+            echo "Refusing to replace unsafe versioned bv target: $bv_versioned_target" >&2
+            exit 1
+          fi
+          if [[ -L "$bv_public_target" ]] || { [[ -e "$bv_public_target" ]] && [[ ! -f "$bv_public_target" ]]; }; then
+            echo "Refusing to replace unsafe public bv target: $bv_public_target" >&2
+            exit 1
+          fi
+
+          bv_stage="$(/usr/bin/mktemp "$bv_version_dir/.bv-v0.22.0.XXXXXX")"
+          /usr/bin/install -m 0755 "$bv_binary" "$bv_stage"
+          bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_stage" | /usr/bin/awk '{print $1}')"
+          if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
+            echo "Staged bv v0.22.0 binary checksum mismatch" >&2
+            exit 1
+          fi
+          /usr/bin/mv -f -- "$bv_stage" "$bv_versioned_target"
+          bv_stage=""
+
+          bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_versioned_target" | /usr/bin/awk '{print $1}')"
+          if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
+            echo "Installed versioned bv v0.22.0 binary checksum mismatch" >&2
+            exit 1
+          fi
+
+          bv_link_stage_dir="$(/usr/bin/mktemp -d "$bv_public_dir/.bv-link-stage.XXXXXX")"
+          bv_link_stage="$bv_link_stage_dir/bv"
+          /usr/bin/ln -s "$bv_versioned_target" "$bv_link_stage"
+          /usr/bin/mv -f -- "$bv_link_stage" "$bv_public_target"
+          bv_link_stage=""
+          /usr/bin/rmdir -- "$bv_link_stage_dir"
+          bv_link_stage_dir=""
+
+          if [[ "$(/usr/bin/readlink "$bv_public_target")" != "$bv_versioned_target" ]]; then
+            echo "Public bv command does not reference the admitted versioned binary" >&2
+            exit 1
+          fi
+          bv_actual_binary_sha256="$(/usr/bin/sha256sum "$bv_public_target" | /usr/bin/awk '{print $1}')"
+          if [[ "$bv_actual_binary_sha256" != "$bv_binary_sha256" ]]; then
+            echo "Public bv command checksum mismatch" >&2
+            exit 1
+          fi
     verify:
-      - bv --help || bv --version
+      - bv --version | grep -Eq '(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)'
+    notes:
+      - "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8c"
+      - "comparison_installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/95a706caf57fc5fde846a453da5f28677d4a81b8c/install.sh"
+      - "comparison_installer_raw_sha256=46b6c8a3c90e59b249a8475aa0fea9dbec97527eba0f57aa779d509cc9140270"
+      - "linux_arm64_archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89"
+      - "linux_arm64_binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320"
+      - "versioned_binary_path=$HOME/.local/lib/acfs/bv/v0.22.0/bv"
+      - "public_command_path=$HOME/.local/bin/bv -> versioned_binary_path"
+      - "The retained immutable upstream installer identity is comparison metadata only; ACFS installs the pinned archive directly and never resolves latest"
 
   - id: stack.cass
     description: Unified search across agent session history

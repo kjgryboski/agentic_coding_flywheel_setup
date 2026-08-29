@@ -14843,19 +14843,15 @@ EOF
     assert_success
 }
 
-@test "install.sh: legacy full-stack phase installs beads_rust before beads_viewer" {
-    local br_line
-    local bv_line
-
+@test "install.sh: legacy full-stack phase retains pinned beads_rust and refuses beads_viewer fallback" {
     run grep -F 'Installing Beads Rust" acfs_run_verified_upstream_script_as_target "br" "bash"' "$PROJECT_ROOT/install.sh"
     assert_success
 
-    br_line="$(grep -n 'Installing Beads Rust" acfs_run_verified_upstream_script_as_target "br" "bash"' "$PROJECT_ROOT/install.sh" | head -1 | cut -d: -f1)"
-    bv_line="$(grep -n 'Installing Beads Viewer" acfs_run_verified_upstream_script_as_target "bv" "bash"' "$PROJECT_ROOT/install.sh" | head -1 | cut -d: -f1)"
+    run grep -F 'Installing Beads Viewer" acfs_run_verified_upstream_script_as_target "bv" "bash"' "$PROJECT_ROOT/install.sh"
+    assert_failure
 
-    [[ -n "$br_line" ]]
-    [[ -n "$bv_line" ]]
-    (( br_line < bv_line ))
+    run grep -F 'Beads Viewer requires generated module stack.beads_viewer; refusing the legacy installer path' "$PROJECT_ROOT/install.sh"
+    assert_success
 }
 
 @test "install.sh: install-wide lock is explicitly released during cleanup" {

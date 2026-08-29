@@ -435,6 +435,115 @@ test_dns_check_hosts() {
     done
 }
 
+extract_dns_address_helpers() {
+    sed -n \
+        -e '/^dns_output_has_address()/,/^}$/p' \
+        -e '/^dns_host_has_address()/,/^}$/p' \
+        "$REPO_ROOT/scripts/preflight.sh"
+}
+
+run_dns_address_case() (
+    local available_tools="$1"
+    local getent_output="${2:-}"
+    local getent_rc="${3:-1}"
+    local host_a_output="${4:-}"
+    local host_a_rc="${5:-1}"
+    local host_aaaa_output="${6:-}"
+    local host_aaaa_rc="${7:-1}"
+    local dig_a_output="${8:-}"
+    local dig_a_rc="${9:-1}"
+    local dig_aaaa_output="${10:-}"
+    local dig_aaaa_rc="${11:-1}"
+
+    command() {
+        if [[ "${1:-}" == "-v" ]]; then
+            case " $available_tools " in
+                *" ${2:-} "*) return 0 ;;
+                *) return 1 ;;
+            esac
+        fi
+        builtin command "$@"
+    }
+    getent() {
+        printf '%s' "$getent_output"
+        return "$getent_rc"
+    }
+    host() {
+        if [[ "${1:-}" == "-t" && "${2:-}" == "A" ]]; then
+            printf '%s' "$host_a_output"
+            return "$host_a_rc"
+        fi
+        if [[ "${1:-}" == "-t" && "${2:-}" == "AAAA" ]]; then
+            printf '%s' "$host_aaaa_output"
+            return "$host_aaaa_rc"
+        fi
+        # Any bare host query is a test failure: it would reintroduce the MX
+        # aggregation bug this harness is designed to catch.
+        return 97
+    }
+    dig() {
+        if [[ "${2:-}" == "A" ]]; then
+            printf '%s' "$dig_a_output"
+            return "$dig_a_rc"
+        fi
+        if [[ "${2:-}" == "AAAA" ]]; then
+            printf '%s' "$dig_aaaa_output"
+            return "$dig_aaaa_rc"
+        fi
+        return 97
+    }
+    ping() { return 97; }
+
+    dns_host_has_address "resolver-fixture.example"
+)
+
+test_dns_address_resolution_semantics() {
+    harness_section "Test: DNS helper requires a nonempty A/AAAA address"
+
+    eval "$(extract_dns_address_helpers)"
+
+    if run_dns_address_case "getent" $'203.0.113.7 STREAM resolver-fixture.example\n' 0; then
+        harness_pass "getent A answer passes"
+    else
+        harness_fail "getent A answer passes"
+    fi
+
+    if run_dns_address_case "getent" "" 0; then
+        harness_fail "empty getent answer fails despite exit 0"
+    else
+        harness_pass "empty getent answer fails despite exit 0"
+    fi
+
+    if run_dns_address_case "host" "" 1 \
+        "resolver-fixture.example has address 203.0.113.8" 0 \
+        "Host resolver-fixture.example not found: 3(NXDOMAIN)" 1; then
+        harness_pass "explicit host A answer passes without a bare/MX query"
+    else
+        harness_fail "explicit host A answer passes without a bare/MX query"
+    fi
+
+    if run_dns_address_case "host" "" 1 \
+        "Host resolver-fixture.example not found: 3(NXDOMAIN)" 1 \
+        "Host resolver-fixture.example not found: 3(NXDOMAIN)" 1; then
+        harness_fail "missing host A and AAAA answers fail"
+    else
+        harness_pass "missing host A and AAAA answers fail"
+    fi
+
+    if run_dns_address_case "dig" "" 1 "" 1 "" 1 "" 0 "" 0; then
+        harness_fail "empty dig answers fail despite exit 0"
+    else
+        harness_pass "empty dig answers fail despite exit 0"
+    fi
+
+    if run_dns_address_case "dig" "" 1 "" 1 "" 1 \
+        "" 0 $'2001:db8::9\n' 0; then
+        harness_pass "dig AAAA-only answer passes"
+    else
+        harness_fail "dig AAAA-only answer passes"
+    fi
+}
+
 test_installer_urls_checked() {
     harness_section "Test: Installer URLs are checked"
 
@@ -752,6 +861,7 @@ main() {
     test_preflight_root_existing_tool_detection_uses_target_home
     test_preflight_nonroot_ignores_slash_home_override_for_disk_check
     test_dns_check_hosts
+    test_dns_address_resolution_semantics
     test_installer_urls_checked
     test_preflight_exit_code_on_warnings
     test_deb822_format_support

@@ -604,7 +604,7 @@ const _flywheelTools: FlywheelTool[] = [
       "bv --diff-since HEAD~100",
     ],
     installCommand:
-      'curl --proto \'=https\' --proto-redir \'=https\' -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/main/install.sh" | bash',
+      './install.sh --yes --mode safe --strict --no-auto-fix --skip-ubuntu-upgrade --only stack.beads_viewer',
     language: "Go",
   },
   {

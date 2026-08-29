@@ -2079,23 +2079,7 @@ install_ubs() {
 # Install Beads Viewer (BV)
 # Task management TUI
 install_bv() {
-    local tool="bv"
-
-    if _stack_is_installed "$tool"; then
-        log_detail "${STACK_NAMES[$tool]} already installed"
-        return 0
-    fi
-
-    log_detail "Installing ${STACK_NAMES[$tool]}..."
-
-    if _stack_run_installer "$tool"; then
-        if _stack_is_installed "$tool"; then
-            log_success "${STACK_NAMES[$tool]} installed"
-            return 0
-        fi
-    fi
-
-    log_warn "${STACK_NAMES[$tool]} installation may have failed"
+    log_error "Beads Viewer requires generated module stack.beads_viewer; refusing the mutable legacy installer path"
     return 1
 }
 

@@ -86,6 +86,10 @@ extract_normalize_read_only_modes_function() {
     sed -n '/^normalize_read_only_modes()/,/^}$/p' "$REPO_ROOT/install.sh"
 }
 
+extract_is_read_only_mode_function() {
+    sed -n '/^acfs_is_read_only_mode()/,/^}$/p' "$REPO_ROOT/install.sh"
+}
+
 extract_parse_args_function() {
     sed -n '/^parse_args()/,/^}$/p' "$REPO_ROOT/install.sh"
 }
@@ -121,6 +125,8 @@ setup_test_env() {
     ACFS_STRICT_MODE=false
     DRY_RUN=false
     PRINT_MODE=false
+    LIST_MODULES=false
+    PRINT_PLAN_MODE=false
     AUTO_FIX_MODE="prompt"
     ACFS_VERIFIED_INSTALLER_CACHE=""
 }
@@ -151,6 +157,8 @@ setup_parse_args_env() {
 eval "$(extract_resume_hint_function)"
 # shellcheck disable=SC1090
 eval "$(extract_print_resume_hint_function)"
+# shellcheck disable=SC1090
+eval "$(extract_is_read_only_mode_function)"
 # shellcheck disable=SC1090
 eval "$(extract_normalize_read_only_modes_function)"
 # shellcheck disable=SC1090
@@ -780,6 +788,28 @@ test_read_only_mode_preserves_no_autofix() {
     return 0
 }
 
+test_list_and_plan_modes_are_read_only() {
+    setup_test_env
+    LIST_MODULES=true
+    AUTO_FIX_MODE="prompt"
+    normalize_read_only_modes
+    if [[ "$AUTO_FIX_MODE" != "dry-run" ]] || ! acfs_is_read_only_mode; then
+        log "  Expected --list-modules to normalize as read-only"
+        return 1
+    fi
+
+    setup_test_env
+    PRINT_PLAN_MODE=true
+    AUTO_FIX_MODE="yes"
+    normalize_read_only_modes
+    if [[ "$AUTO_FIX_MODE" != "dry-run" ]] || ! acfs_is_read_only_mode; then
+        log "  Expected --print-plan to normalize as read-only"
+        return 1
+    fi
+
+    return 0
+}
+
 # ============================================================
 # Main
 # ============================================================
@@ -820,6 +850,7 @@ main() {
     run_test test_dry_run_forces_autofix_preview
     run_test test_print_mode_forces_autofix_preview
     run_test test_read_only_mode_preserves_no_autofix
+    run_test test_list_and_plan_modes_are_read_only
 
     # Summary
     log ""
