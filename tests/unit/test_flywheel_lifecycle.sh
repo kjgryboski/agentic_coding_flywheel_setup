@@ -127,7 +127,15 @@ assert value["contract"]["minimum_disk_gib"] == 20
 ' "$qualification_json"
 
 export FLYWHEEL_SOURCE_REPO="$QUALIFICATION_ROOT"
+mkdir -p "$FLYWHEEL_STATE_HOME"
+chmod 0700 "$FLYWHEEL_STATE_HOME"
+printf 'do-not-overwrite\n' >"$TEST_ROOT/symlink-target"
+ln -s "$TEST_ROOT/symlink-target" "$FLYWHEEL_STATE_HOME/source-root"
+ln -s "$TEST_ROOT/symlink-target" "$FLYWHEEL_STATE_HOME/installation.json"
 HOME="$TEST_ROOT/home" "$REPO_ROOT/flywheel" mac install --quiet
+[[ ! -L "$FLYWHEEL_STATE_HOME/source-root" ]]
+[[ ! -L "$FLYWHEEL_STATE_HOME/installation.json" ]]
+[[ "$(<"$TEST_ROOT/symlink-target")" == "do-not-overwrite" ]]
 python3 - "$FLYWHEEL_STATE_HOME/installation.json" "$QUALIFICATION_ROOT" <<'PY'
 import json
 import subprocess
@@ -194,6 +202,15 @@ assert len(rollout["receipt_sha256"]) == 64
 assert [item["code"] for item in value["blockers"]] == ["live_rollout_not_proven"]
 ' "$rollout_json"
 
+ln -s "$TEST_ROOT/rollout.json" "$TEST_ROOT/rollout-link.json"
+linked_rollout_json="$("$REPO_ROOT/flywheel" status --json --rollout-receipt "$TEST_ROOT/rollout-link.json")"
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["repository_rollout"]["status"] == "invalid"
+assert [item["code"] for item in value["blockers"]] == ["receipt_invalid"]
+' "$linked_rollout_json"
+
 doctor_json="$("$REPO_ROOT/flywheel" doctor --json)"
 python3 -c 'import json,sys; value=json.loads(sys.argv[1]); assert value["status"] == "pass"' "$doctor_json"
 grep -F -- 'scripts/flywheel-partial-safe-doctor.sh --json' "$CALLS" >/dev/null
@@ -257,6 +274,27 @@ typo_rc=0
 typo_error="$("$REPO_ROOT/flywheel" statsu 2>&1)" || typo_rc=$?
 [[ "$typo_rc" -eq 2 ]]
 [[ "$typo_error" == *'did you mean: flywheel status --json'* ]]
+
+python3 - "$FLYWHEEL_STATE_HOME/installation.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+value["modules"]["approved"] = 9
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+PY
+tampered_rc=0
+tampered_json="$("$REPO_ROOT/flywheel" status --json)" || tampered_rc=$?
+[[ "$tampered_rc" -eq 1 ]]
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["installation"]["status"] == "receipt_invalid"
+assert any(item["code"] == "installation_receipt_invalid" for item in value["blockers"])
+' "$tampered_json"
 
 "$REPO_ROOT/flywheel" stop --quiet
 grep -F -- 'stop agent-flywheel-ubuntu2404' "$CALLS" >/dev/null
