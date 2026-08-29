@@ -73,12 +73,13 @@ else
     record isolation fail "a VM or isolated qualification host is required"
 fi
 
+git_source=(git -c "safe.directory=$SOURCE_ROOT" -C "$SOURCE_ROOT")
 if [[ -d "$SOURCE_ROOT/.git" || -f "$SOURCE_ROOT/.git" ]] \
-    && git -C "$SOURCE_ROOT" rev-parse --verify HEAD >/dev/null 2>&1 \
-    && git -C "$SOURCE_ROOT" diff --quiet \
-    && git -C "$SOURCE_ROOT" diff --cached --quiet \
-    && [[ -z "$(git -C "$SOURCE_ROOT" ls-files --others --exclude-standard)" ]]; then
-    record source_identity pass "$(git -C "$SOURCE_ROOT" rev-parse HEAD)/$(git -C "$SOURCE_ROOT" rev-parse 'HEAD^{tree}')"
+    && "${git_source[@]}" rev-parse --verify HEAD >/dev/null 2>&1 \
+    && "${git_source[@]}" diff --quiet \
+    && "${git_source[@]}" diff --cached --quiet \
+    && [[ -z "$("${git_source[@]}" ls-files --others --exclude-standard)" ]]; then
+    record source_identity pass "$("${git_source[@]}" rev-parse HEAD)/$("${git_source[@]}" rev-parse 'HEAD^{tree}')"
 else
     record source_identity fail "source checkout is missing or dirty"
 fi

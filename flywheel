@@ -214,7 +214,7 @@ doctor_command() {
     ((JSON == 1)) && doctor_args+=(--json)
     "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
         HOME=/home/ubuntu \
-        PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin \
+        PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         TARGET_USER=ubuntu \
         TARGET_HOME=/home/ubuntu \
         FLYWHEEL_SOURCE_ROOT="$guest_root" \

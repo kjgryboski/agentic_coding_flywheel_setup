@@ -42,13 +42,17 @@ sudo -u ubuntu env \
 doctor() {
     sudo -u ubuntu env \
         HOME="$TARGET_HOME" \
-        PATH="$TARGET_HOME/.local/bin:$TARGET_HOME/.bun/bin:$TARGET_HOME/.cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin" \
+        PATH="$TARGET_HOME/.local/bin:$TARGET_HOME/.bun/bin:$TARGET_HOME/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         TARGET_USER="$TARGET_USER" \
         TARGET_HOME="$TARGET_HOME" \
         FLYWHEEL_SOURCE_ROOT="$SOURCE_ROOT" \
         ACFS_PARTIAL_SAFE_ALLOWLIST_FILE="$DOCTOR_ALLOWLIST" \
         bash -p "$SOURCE_ROOT/scripts/flywheel-partial-safe-doctor.sh" --json
 }
+
+apt-get -o Acquire::Retries=3 update
+apt-get -o DPkg::Lock::Timeout=120 install -y \
+    curl git ca-certificates unzip tar xz-utils jq build-essential gnupg lsb-release
 
 if [[ -f "$TARGET_HOME/.acfs/state.json" ]]; then
     if doctor; then
@@ -60,7 +64,6 @@ if [[ -f "$TARGET_HOME/.acfs/state.json" ]]; then
     exit 1
 fi
 
-apt-get -o Acquire::Retries=3 update
 install -o root -g root -m 0600 /dev/null "$INSTALL_LOG"
 
 head="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
