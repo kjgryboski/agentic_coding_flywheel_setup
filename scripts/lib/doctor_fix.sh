@@ -851,6 +851,87 @@ doctor_fix_require_security() {
     return 0
 }
 
+doctor_fix_core_module_for_tool() {
+    case "${1:-}" in
+        mcp_agent_mail) printf '%s\n' "stack.mcp_agent_mail" ;;
+        br) printf '%s\n' "stack.beads_rust" ;;
+        bv) printf '%s\n' "stack.beads_viewer" ;;
+        *) return 1 ;;
+    esac
+}
+
+doctor_fix_core_contract_for_tool() {
+    case "${1:-}" in
+        mcp_agent_mail)
+            printf '\n'
+            ;;
+        br)
+            printf '%s\n' "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
+            ;;
+        bv)
+            printf '%s\n' "source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+doctor_fix_core_binary_path() {
+    local tool="${1:-}"
+    local runtime_home=""
+
+    runtime_home="$(doctor_fix_runtime_home 2>/dev/null || true)"
+    [[ -n "$runtime_home" ]] || return 1
+    case "$tool" in
+        mcp_agent_mail) printf '%s\n' "$runtime_home/.local/bin/am" ;;
+        br) printf '%s\n' "$runtime_home/.local/bin/br" ;;
+        bv) printf '%s\n' "$runtime_home/.local/bin/bv" ;;
+        *) return 1 ;;
+    esac
+}
+
+doctor_fix_require_core_installer_admission() {
+    local tool="${1:-}"
+    local core_module=""
+    local core_target_home=""
+    shift || true
+
+    core_module="$(doctor_fix_core_module_for_tool "$tool" 2>/dev/null || true)"
+    [[ -n "$core_module" ]] || return 0
+    core_target_home="$(doctor_fix_runtime_home 2>/dev/null || true)"
+
+    if ! doctor_fix_require_security \
+        || ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
+        || ! acfs_core_policy_enforce_installer_execution \
+            "$core_module" install "$core_target_home" "$@"; then
+        doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-core installer admission is on HOLD for $tool}"
+        return 1
+    fi
+
+    return 0
+}
+
+doctor_fix_core_binary_admitted() {
+    local tool="${1:-}"
+    local binary_path="${2:-}"
+    local core_module=""
+    local core_contract=""
+
+    core_module="$(doctor_fix_core_module_for_tool "$tool" 2>/dev/null || true)"
+    [[ -n "$core_module" ]] || return 0
+    core_contract="$(doctor_fix_core_contract_for_tool "$tool" 2>/dev/null || true)"
+
+    if ! declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \
+        || ! acfs_core_policy_admit_binary \
+            "$core_module" install "$core_contract" "$binary_path"; then
+        doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-core binary admission is on HOLD for $tool}"
+        return 1
+    fi
+
+    return 0
+}
+
 doctor_fix_parse_env_assignment() {
     local assignment="${1:-}"
     local -n _name_ref="$2"
@@ -1024,7 +1105,7 @@ doctor_fix_run_verified_installer_with_env() {
             core_target_home="$(doctor_fix_runtime_home 2>/dev/null || true)"
             if ! declare -f acfs_core_policy_enforce_installer_execution >/dev/null 2>&1 \
                 || ! acfs_core_policy_enforce_installer_execution \
-                    "$core_module" doctor "$core_target_home" "$@"; then
+                    "$core_module" install "$core_target_home" "$@"; then
                 doctor_fix_log WARN "${ACFS_CORE_POLICY_REASON:-core installer execution policy unavailable for $tool}"
                 return 1
             fi
@@ -1410,6 +1491,14 @@ fix_symlink_create() {
     local existing_parent=""
     local rollback_command=""
 
+    case "$symlink" in
+        */.local/bin/am|*/.local/bin/br|*/.local/bin/bv)
+            doctor_fix_log ERROR "Core command symlink repair is on HOLD; use its canonical exact-source installer"
+            FIX_FAILED=$((FIX_FAILED + 1))
+            return 1
+            ;;
+    esac
+
     # Guard: Binary must exist and be executable
     if [[ ! -x "$binary" ]]; then
         doctor_fix_log WARN "Binary not found or not executable: $binary"
@@ -1723,8 +1812,8 @@ dispatch_fix() {
         stack.beads_rust|stack.beads_rust.*)
             if ! doctor_fix_require_security \
                 || ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
-                || ! acfs_core_policy_enforce "stack.beads_rust" doctor \
-                    "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"; then
+                || ! acfs_core_policy_enforce "stack.beads_rust" install \
+                    "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"; then
                 doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-Beads Rust core admission policy unavailable}"
                 FIX_FAILED=$((FIX_FAILED + 1))
                 return 1
@@ -1768,11 +1857,22 @@ dispatch_fix() {
             ;;
 
         # Symlinks
-        symlink.br)
-            fix_symlink_create "$check_id" "$(doctor_fix_runtime_home)/.cargo/bin/br" "$(doctor_fix_runtime_home)/.local/bin/br"
-            ;;
-        symlink.bv)
-            fix_symlink_create "$check_id" "$(doctor_fix_runtime_home)/.cargo/bin/bv" "$(doctor_fix_runtime_home)/.local/bin/bv"
+        symlink.br|symlink.bv)
+            local core_tool="${check_id#symlink.}"
+            local core_module=""
+            local core_contract=""
+            core_module="$(doctor_fix_core_module_for_tool "$core_tool" 2>/dev/null || true)"
+            core_contract="$(doctor_fix_core_contract_for_tool "$core_tool" 2>/dev/null || true)"
+            if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
+                || ! acfs_core_policy_enforce "$core_module" doctor "$core_contract"; then
+                doctor_fix_log ERROR "${ACFS_CORE_POLICY_REASON:-core symlink admission is unavailable for $core_tool}"
+            else
+                doctor_fix_log ERROR "$core_tool symlink repair is on HOLD; arbitrary Cargo binaries are not canonical repair sources"
+            fi
+            FIXES_MANUAL+=("$check_id|Use the canonical content-addressed installer; no Cargo binary was linked|install.sh --only $core_module")
+            FIX_MANUAL=$((FIX_MANUAL + 1))
+            FIX_FAILED=$((FIX_FAILED + 1))
+            return 1
             ;;
         symlink.am)
             if ! doctor_fix_require_agent_mail_admission; then
@@ -1870,6 +1970,14 @@ fix_stack_install() {
     local runtime_home=""
     local bash_bin=""
 
+    case "$binary_name" in
+        am|br|bv)
+            doctor_fix_log ERROR "$binary_name cannot use the mutable stack-install repair route; canonical core admission is required"
+            FIX_FAILED=$((FIX_FAILED + 1))
+            return 1
+            ;;
+    esac
+
     runtime_home="$(doctor_fix_runtime_home)"
     if [[ -z "$runtime_home" ]]; then
         doctor_fix_log ERROR "Failed to resolve runtime environment for $binary_name install"
@@ -1946,10 +2054,25 @@ fix_verified_install_with_env() {
     local dry_run_env_display=""
     local installed_path=""
     local rollback_command=""
+    local core_module=""
 
-    installed_path="$(doctor_fix_binary_path "$binary_name" 2>/dev/null || true)"
+    if ! doctor_fix_require_core_installer_admission "$tool" "${args[@]}"; then
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+
+    core_module="$(doctor_fix_core_module_for_tool "$tool" 2>/dev/null || true)"
+    if [[ -n "$core_module" ]]; then
+        installed_path="$(doctor_fix_core_binary_path "$tool" 2>/dev/null || true)"
+        [[ -x "$installed_path" ]] || installed_path=""
+    else
+        installed_path="$(doctor_fix_binary_path "$binary_name" 2>/dev/null || true)"
+    fi
     if [[ -n "$installed_path" ]]; then
         if [[ "$binary_name" == "bv" && "$installed_path" == *"/google-cloud-sdk/"* ]]; then
+            installed_path=""
+        elif [[ -n "$core_module" ]] && ! doctor_fix_core_binary_admitted "$tool" "$installed_path"; then
+            doctor_fix_log WARN "$binary_name exists but is not the admitted pinned binary; refusing the installed-command shortcut"
             installed_path=""
         else
             doctor_fix_log INFO "$binary_name already installed"
@@ -1966,8 +2089,18 @@ fix_verified_install_with_env() {
 
     if doctor_fix_run_verified_installer_with_env "$tool" "$installer_env_assignment" "${args[@]}" >/dev/null 2>&1; then
         hash -r
-        installed_path="$(doctor_fix_binary_path "$binary_name" 2>/dev/null || true)"
+        if [[ -n "$core_module" ]]; then
+            installed_path="$(doctor_fix_core_binary_path "$tool" 2>/dev/null || true)"
+            [[ -x "$installed_path" ]] || installed_path=""
+        else
+            installed_path="$(doctor_fix_binary_path "$binary_name" 2>/dev/null || true)"
+        fi
         if [[ -n "$installed_path" ]]; then
+            if [[ -n "$core_module" ]] && ! doctor_fix_core_binary_admitted "$tool" "$installed_path"; then
+                doctor_fix_log ERROR "Verified installer returned success but $binary_name remains on HOLD"
+                FIX_FAILED=$((FIX_FAILED + 1))
+                return 1
+            fi
             rollback_command="$(doctor_fix_build_remove_binary_rollback "$installed_path")"
             if ! doctor_fix_record_change_or_rollback \
                 "$rollback_command" \
@@ -1999,6 +2132,12 @@ fix_verified_install_with_target_tmpdir() {
     shift 3
     local installer_tmpdir=""
 
+    if doctor_fix_core_module_for_tool "$tool" >/dev/null 2>&1; then
+        doctor_fix_log ERROR "$tool cannot use the generic target-TMPDIR repair route; canonical core admission is required"
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+
     if [[ "$DOCTOR_FIX_DRY_RUN" == "true" ]]; then
         installer_tmpdir="$(doctor_fix_runtime_home)/.cache/acfs/installer-tmp/${tool}.XXXXXX"
     else
@@ -2021,10 +2160,25 @@ fix_verified_install() {
     local args_display="${args[*]:-}"
     local installed_path=""
     local rollback_command=""
+    local core_module=""
 
-    installed_path="$(doctor_fix_binary_path "$binary_name" 2>/dev/null || true)"
+    if ! doctor_fix_require_core_installer_admission "$tool" "${args[@]}"; then
+        FIX_FAILED=$((FIX_FAILED + 1))
+        return 1
+    fi
+
+    core_module="$(doctor_fix_core_module_for_tool "$tool" 2>/dev/null || true)"
+    if [[ -n "$core_module" ]]; then
+        installed_path="$(doctor_fix_core_binary_path "$tool" 2>/dev/null || true)"
+        [[ -x "$installed_path" ]] || installed_path=""
+    else
+        installed_path="$(doctor_fix_binary_path "$binary_name" 2>/dev/null || true)"
+    fi
     if [[ -n "$installed_path" ]]; then
         if [[ "$binary_name" == "bv" && "$installed_path" == *"/google-cloud-sdk/"* ]]; then
+            installed_path=""
+        elif [[ -n "$core_module" ]] && ! doctor_fix_core_binary_admitted "$tool" "$installed_path"; then
+            doctor_fix_log WARN "$binary_name exists but is not the admitted pinned binary; refusing the installed-command shortcut"
             installed_path=""
         else
             doctor_fix_log INFO "$binary_name already installed"
@@ -2040,8 +2194,18 @@ fix_verified_install() {
 
     if doctor_fix_run_verified_installer "$tool" "${args[@]}" >/dev/null 2>&1; then
         hash -r
-        installed_path="$(doctor_fix_binary_path "$binary_name" 2>/dev/null || true)"
+        if [[ -n "$core_module" ]]; then
+            installed_path="$(doctor_fix_core_binary_path "$tool" 2>/dev/null || true)"
+            [[ -x "$installed_path" ]] || installed_path=""
+        else
+            installed_path="$(doctor_fix_binary_path "$binary_name" 2>/dev/null || true)"
+        fi
         if [[ -n "$installed_path" ]]; then
+            if [[ -n "$core_module" ]] && ! doctor_fix_core_binary_admitted "$tool" "$installed_path"; then
+                doctor_fix_log ERROR "Verified installer returned success but $binary_name remains on HOLD"
+                FIX_FAILED=$((FIX_FAILED + 1))
+                return 1
+            fi
             rollback_command="$(doctor_fix_build_remove_binary_rollback "$installed_path")"
             if ! doctor_fix_record_change_or_rollback \
                 "$rollback_command" \

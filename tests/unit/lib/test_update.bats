@@ -114,6 +114,239 @@ EOF
     assert_output ""
 }
 
+@test "canonical core binary admission rejects arbitrary br and bv despite pinned version output" {
+    local fake_binary="$HOME/fake-core-binary"
+    local br_contract="source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
+    local bv_contract="source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv"
+
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$fake_binary"
+    chmod +x "$fake_binary"
+    # shellcheck source=../../../scripts/lib/contract.sh
+    source "$PROJECT_ROOT/scripts/lib/contract.sh"
+
+    MOCK_CORE_SHA="$(printf '0%.0s' {1..64})"
+    MOCK_CORE_VERSION="br 0.5.3"
+    _acfs_core_policy_sha256_file() { printf '%s\n' "$MOCK_CORE_SHA"; }
+    _acfs_core_policy_version_output() { printf '%s\n' "$MOCK_CORE_VERSION"; }
+    admit_core_and_print_reason() {
+        if acfs_core_policy_admit_binary "$@"; then
+            return 0
+        fi
+        printf '%s\n' "$ACFS_CORE_POLICY_REASON"
+        return 1
+    }
+
+    run admit_core_and_print_reason stack.beads_rust doctor "$br_contract" "$fake_binary"
+    assert_failure
+    assert_output "stack.beads_rust installed binary digest mismatch"
+
+    MOCK_CORE_SHA="f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
+    MOCK_CORE_VERSION="br 9.9.9"
+    run admit_core_and_print_reason stack.beads_rust doctor "$br_contract" "$fake_binary"
+    assert_failure
+    assert_output "stack.beads_rust installed binary version mismatch"
+
+    MOCK_CORE_VERSION="br 0.5.3"
+    run acfs_core_policy_admit_binary stack.beads_rust doctor "$br_contract" "$fake_binary"
+    assert_success
+
+    MOCK_CORE_SHA="$(printf 'f%.0s' {1..64})"
+    MOCK_CORE_VERSION="bv 0.22.0"
+    run admit_core_and_print_reason stack.beads_viewer doctor "$bv_contract" "$fake_binary"
+    assert_failure
+    assert_output "stack.beads_viewer installed binary digest mismatch"
+
+    MOCK_CORE_SHA="ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320"
+    run acfs_core_policy_admit_binary stack.beads_viewer doctor "$bv_contract" "$fake_binary"
+    assert_success
+}
+
+@test "doctor rejects arbitrary br and bv and still runs their generated exact checks" {
+    local doctor_lib="$PROJECT_ROOT/scripts/lib/doctor.sh"
+    local fake_bin="$HOME/doctor-core-bin"
+    local checks="$BATS_TEST_TMPDIR/doctor-core-checks"
+    local admissions="$BATS_TEST_TMPDIR/doctor-core-admissions"
+    mkdir -p "$fake_bin"
+    printf '#!/usr/bin/env bash\nprintf "br 0.5.3\\n"\n' > "$fake_bin/br"
+    printf '#!/usr/bin/env bash\nprintf "bv 0.22.0\\n"\n' > "$fake_bin/bv"
+    chmod +x "$fake_bin/br" "$fake_bin/bv"
+
+    run env \
+        ACFS_TEST_DOCTOR_BIN="$fake_bin" \
+        ACFS_TEST_DOCTOR_CHECKS="$checks" \
+        ACFS_TEST_DOCTOR_ADMISSIONS="$admissions" \
+        ACFS_TEST_DOCTOR_HOME="$HOME" \
+        bash -c '
+            eval "$(sed -n "/^check_stack()/,/^}$/p" "$1")"
+            section() { :; }
+            blank_line() { :; }
+            check_command() { :; }
+            check_dcg_hook_status() { :; }
+            check() {
+                printf "%s|%s|%s|%s|%s\n" "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" >> "$ACFS_TEST_DOCTOR_CHECKS"
+            }
+            doctor_binary_path() {
+                case "${1:-}" in
+                    br|bv) printf "%s/%s\n" "$ACFS_TEST_DOCTOR_BIN" "$1" ;;
+                    *) return 1 ;;
+                esac
+            }
+            doctor_binary_exists() { return 1; }
+            doctor_runtime_home() { printf "%s\n" "$ACFS_TEST_DOCTOR_HOME"; }
+            get_version_line() { "$1" --version 2>/dev/null || "$1"; }
+            fix_for_module() { printf "fix %s\n" "${1:-}"; }
+            _acfs_doctor_system_binary_path() { return 1; }
+            acfs_core_policy_admit_binary() {
+                printf "%s|%s|%s\n" "${1:-}" "${2:-}" "${4:-}" >> "$ACFS_TEST_DOCTOR_ADMISSIONS"
+                ACFS_CORE_POLICY_REASON="${1:-core} installed binary digest mismatch"
+                return 1
+            }
+            acfs_core_policy_enforce() {
+                ACFS_CORE_POLICY_REASON="C4 commissioning HOLD"
+                return 1
+            }
+            TARGET_HOME="$ACFS_TEST_DOCTOR_HOME"
+            TARGET_USER="acfs-test"
+            DEEP_MODE=false
+            check_stack
+            grep -F "stack.bv|Beads Viewer|fail|stack.beads_viewer installed binary digest mismatch" "$ACFS_TEST_DOCTOR_CHECKS" >/dev/null
+            grep -F "stack.beads_rust|beads_rust (br)|fail|stack.beads_rust installed binary digest mismatch" "$ACFS_TEST_DOCTOR_CHECKS" >/dev/null
+            grep -F "stack.beads_viewer|doctor|$ACFS_TEST_DOCTOR_BIN/bv" "$ACFS_TEST_DOCTOR_ADMISSIONS" >/dev/null
+            grep -F "stack.beads_rust|doctor|$ACFS_TEST_DOCTOR_BIN/br" "$ACFS_TEST_DOCTOR_ADMISSIONS" >/dev/null
+        ' _ "$doctor_lib"
+    assert_success
+
+    # shellcheck disable=SC1090
+    eval "$(sed -n '/^_is_bespoke_covered()/,/^}$/p' "$doctor_lib")"
+    run _is_bespoke_covered stack.beads_rust.1
+    assert_failure
+    run _is_bespoke_covered stack.beads_rust.2
+    assert_failure
+    run _is_bespoke_covered stack.beads_viewer
+    assert_failure
+}
+
+@test "direct stack br install cannot accept command presence or a bad postcondition" {
+    local stack_lib="$PROJECT_ROOT/scripts/lib/stack.sh"
+    local marker="$BATS_TEST_TMPDIR/direct-stack-br-installer"
+    mkdir -p "$HOME/.local/bin"
+    printf '#!/usr/bin/env bash\nprintf "br 0.5.3\\n"\n' > "$HOME/.local/bin/br"
+    chmod +x "$HOME/.local/bin/br"
+
+    run env ACFS_TEST_TARGET_HOME="$HOME" ACFS_TEST_INSTALLER_MARKER="$marker" bash -c '
+        eval "$(sed -n "/^install_beads_rust()/,/^}$/p" "$1")"
+        declare -A STACK_NAMES=([br]="BR")
+        TARGET_USER="acfs-test"
+        _stack_enforce_core_policy() { :; }
+        _stack_target_home() { printf "%s\n" "$ACFS_TEST_TARGET_HOME"; }
+        _stack_is_installed() { return 0; }
+        acfs_core_policy_admit_binary() {
+            ACFS_CORE_POLICY_REASON="stack.beads_rust installed binary digest mismatch"
+            return 1
+        }
+        _stack_run_verified_installer() {
+            : > "$ACFS_TEST_INSTALLER_MARKER"
+            return 0
+        }
+        log_detail() { :; }
+        log_success() { :; }
+        log_error() { printf "%s\n" "$*"; }
+        log_warn() { :; }
+        if install_beads_rust; then
+            exit 91
+        fi
+        [[ -e "$ACFS_TEST_INSTALLER_MARKER" ]]
+    ' _ "$stack_lib"
+    assert_success
+    assert_output --partial "installed binary digest mismatch"
+    [[ -e "$marker" ]]
+}
+
+@test "doctor fix cannot accept an arbitrary br before or after its verified installer" {
+    local doctor_fix_lib="$PROJECT_ROOT/scripts/lib/doctor_fix.sh"
+    local marker="$BATS_TEST_TMPDIR/doctor-fix-br-installer"
+    local fake_br="$HOME/.local/bin/br"
+    mkdir -p "$(dirname "$fake_br")"
+    printf '#!/usr/bin/env bash\nprintf "br 0.5.3\\n"\n' > "$fake_br"
+    chmod +x "$fake_br"
+
+    run env ACFS_TEST_FAKE_BR="$fake_br" ACFS_TEST_INSTALLER_MARKER="$marker" bash -c '
+        eval "$(sed -n "/^fix_verified_install()/,/^}$/p" "$1")"
+        eval "$(sed -n "/^fix_stack_install()/,/^}$/p" "$1")"
+        DOCTOR_FIX_DRY_RUN=false
+        FIX_FAILED=0
+        declare -a FIXES_DRY_RUN=() FIXES_APPLIED=()
+        doctor_fix_require_core_installer_admission() { return 0; }
+        doctor_fix_core_module_for_tool() { printf "stack.beads_rust\n"; }
+        doctor_fix_core_binary_path() { printf "%s\n" "$ACFS_TEST_FAKE_BR"; }
+        doctor_fix_core_binary_admitted() {
+            ACFS_CORE_POLICY_REASON="stack.beads_rust installed binary digest mismatch"
+            return 1
+        }
+        doctor_fix_binary_path() { printf "%s\n" "$ACFS_TEST_FAKE_BR"; }
+        doctor_fix_run_verified_installer() {
+            : > "$ACFS_TEST_INSTALLER_MARKER"
+            return 0
+        }
+        doctor_fix_log() { printf "%s:%s\n" "$1" "$2"; }
+        if fix_verified_install check.br br br \
+            --version v0.5.3 \
+            --dest "$(dirname "$ACFS_TEST_FAKE_BR")" \
+            --artifact-url pinned \
+            --checksum pinned; then
+            exit 91
+        fi
+        [[ -e "$ACFS_TEST_INSTALLER_MARKER" ]]
+        (( FIX_FAILED > 0 ))
+        if fix_stack_install check.br br "arbitrary mutable install command"; then
+            exit 92
+        fi
+    ' _ "$doctor_fix_lib"
+    assert_success
+    assert_output --partial "refusing the installed-command shortcut"
+    assert_output --partial "remains on HOLD"
+    [[ -e "$marker" ]]
+}
+
+@test "doctor fix leaves br and bv symlinks on HOLD instead of using Cargo binaries" {
+    local doctor_fix_lib="$PROJECT_ROOT/scripts/lib/doctor_fix.sh"
+    local marker="$BATS_TEST_TMPDIR/doctor-fix-core-symlink"
+
+    run env ACFS_TEST_SYMLINK_MARKER="$marker" bash -c '
+        core_symlink_function="$(sed -n "/^fix_symlink_create()/,/^}$/p" "$1")"
+        eval "$(sed -n "/^dispatch_fix()/,/^}$/p" "$1")"
+        DOCTOR_FIX_YES=true
+        FIX_FAILED=0
+        FIX_MANUAL=0
+        FIX_SKIPPED=0
+        declare -a FIXES_MANUAL=()
+        doctor_fix_core_module_for_tool() { printf "stack.beads_%s\n" "${1:-}"; }
+        doctor_fix_core_contract_for_tool() { printf "pinned-%s\n" "${1:-}"; }
+        acfs_core_policy_enforce() { return 0; }
+        doctor_fix_log() { printf "%s:%s\n" "$1" "$2"; }
+        fix_symlink_create() {
+            : > "$ACFS_TEST_SYMLINK_MARKER"
+            return 0
+        }
+        for check_id in symlink.br symlink.bv; do
+            if dispatch_fix "$check_id" fail; then
+                exit 91
+            fi
+        done
+        [[ ! -e "$ACFS_TEST_SYMLINK_MARKER" ]]
+        (( FIX_MANUAL == 2 ))
+        (( FIX_FAILED == 2 ))
+        eval "$core_symlink_function"
+        if fix_symlink_create direct.core /arbitrary/.cargo/bin/br /target/.local/bin/br; then
+            exit 92
+        fi
+        (( FIX_FAILED == 3 ))
+    ' _ "$doctor_fix_lib"
+    assert_success
+    assert_output --partial "arbitrary Cargo binaries are not canonical repair sources"
+    [[ ! -e "$marker" ]]
+}
+
 @test "checksums metadata validation rejects missing current stack installer" {
     local checksum_file="$HOME/checksums-missing-rch.yaml"
     local tool=""
@@ -9758,7 +9991,7 @@ EOF
     assert_success
 }
 
-@test "acfs services start propagates an unhealthy existing session" {
+@test "acfs services holds before accepting an existing session status" {
     local services="$PROJECT_ROOT/scripts/lib/acfs-services.sh"
 
     run bash -c '
@@ -9766,18 +9999,26 @@ EOF
         set +e
         _initialize_bins() { :; }
         _require_tmux() { :; }
+        _validate_http_endpoints() { :; }
         _session_exists() { return 0; }
-        cmd_status() { return 23; }
+        cmd_status() { printf "status-bypass-called\n"; return 23; }
+        acfs_core_policy_enforce() {
+            ACFS_CORE_POLICY_REASON="C4 commissioning HOLD: strict Agent Mail admission is unavailable"
+            return 1
+        }
         cmd_start
     ' _ "$services"
-    assert_failure 23
-    assert_output --partial "checking actual service health"
+    assert_failure
+    assert_output --partial "C4 commissioning HOLD"
+    refute_output --partial "status-bypass-called"
+    refute_output --partial "checking actual service health"
 }
 
-@test "acfs services reuses an external owner without requiring am or failing stop" {
+@test "acfs services holds dry-run, external health, stop, and status before admission" {
     local services="$PROJECT_ROOT/scripts/lib/acfs-services.sh"
+    local probe_marker="$BATS_TEST_TMPDIR/acfs-services-pre-policy-probe"
 
-    run bash -c '
+    run env ACFS_TEST_PROBE_MARKER="$probe_marker" bash -c '
         source "$1"
         set +e
         _initialize_bins() {
@@ -9787,21 +10028,35 @@ EOF
             _CURL_BIN="/usr/bin/true"
         }
         _require_tmux() { :; }
+        _validate_http_endpoints() { :; }
         _session_exists() { return 1; }
-        _agent_mail_is_healthy() { return 0; }
+        _agent_mail_is_healthy() {
+            : > "$ACFS_TEST_PROBE_MARKER"
+            return 0
+        }
         _native_agent_mail_unit_available() { return 1; }
         _native_agent_mail_is_active() { return 1; }
-        _validate_http_endpoints() { :; }
+        acfs_core_policy_enforce() {
+            ACFS_CORE_POLICY_REASON="C4 commissioning HOLD: strict Agent Mail admission is unavailable"
+            return 1
+        }
         _DRY_RUN=true
-        cmd_start || exit $?
+        if cmd_start; then exit 91; fi
+        [[ ! -e "$ACFS_TEST_PROBE_MARKER" ]] || exit 92
+        if cmd_stop; then exit 93; fi
+        [[ ! -e "$ACFS_TEST_PROBE_MARKER" ]] || exit 94
         _DRY_RUN=false
-        cmd_stop
+        if cmd_start; then exit 95; fi
+        [[ ! -e "$ACFS_TEST_PROBE_MARKER" ]] || exit 96
+        if cmd_status; then exit 97; fi
+        [[ ! -e "$ACFS_TEST_PROBE_MARKER" ]] || exit 98
     ' _ "$services"
 
     assert_success
-    refute_output --partial "Missing binary: am"
-    assert_output --partial "Would reuse or start Agent Mail"
-    assert_output --partial "it was left untouched"
+    assert_output --partial "C4 commissioning HOLD"
+    refute_output --partial "Would reuse or start Agent Mail"
+    refute_output --partial "Reusing healthy Agent Mail"
+    [[ ! -e "$probe_marker" ]]
 }
 
 @test "acfs services holds Agent Mail before native or tmux mutation" {

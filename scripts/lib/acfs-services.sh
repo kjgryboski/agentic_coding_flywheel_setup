@@ -95,7 +95,7 @@ _agent_mail_mutation_admitted() {
     if ! declare -f acfs_core_policy_enforce >/dev/null 2>&1 \
         || ! acfs_core_policy_enforce "stack.mcp_agent_mail" service ""; then
         _err "${ACFS_CORE_POLICY_REASON:-Agent Mail core admission policy unavailable}"
-        _err "Agent Mail service mutation is on HOLD; use 'acfs doctor' for the admission status."
+        _err "Agent Mail service admission is on HOLD; use 'acfs doctor' for the exact-source status."
         return 1
     fi
 
@@ -288,6 +288,7 @@ _wait_for_agent_mail() {
 # Fails fast (non-zero) with an actionable message on bad/duplicate/occupied
 # ports so we never leave a dead pane behind a "started" report.
 _validate_http_endpoints() {
+    local validation_scope="${1:-full}"
     local rc=0
     local p
     local h
@@ -314,6 +315,8 @@ _validate_http_endpoints() {
         _err "They cannot share a port. Override with ACFS_AGENT_MAIL_PORT / ACFS_CM_PORT."
         return 1
     fi
+
+    [[ "$validation_scope" == "config-only" ]] && return 0
 
     # During --dry-run we only validate config, not live socket state.
     $_DRY_RUN && return 0
@@ -412,8 +415,14 @@ _wait_for_tmux_services() {
 # --- Commands ---
 
 cmd_start() {
+    # Validate inert configuration first, then enforce Agent Mail admission
+    # before an existing session, dry-run, or healthy external endpoint can be
+    # treated as a successful service state.
+    _validate_http_endpoints config-only || return 1
+    _agent_mail_mutation_admitted || return 1
     _initialize_bins
     _require_tmux
+    _validate_http_endpoints || return 1
 
     if _session_exists; then
         _warn "Session '$ACFS_SVC_SESSION' already exists; checking actual service health."
@@ -433,9 +442,6 @@ cmd_start() {
         _err "Cannot start services -- install missing binaries first."
         return 1
     fi
-
-    # Fail fast on bad/duplicate/occupied HTTP ports before touching tmux.
-    _validate_http_endpoints || return 1
 
     if $_DRY_RUN; then
         _info "[dry-run] Would reuse or start Agent Mail at $ACFS_AGENT_MAIL_HOST:$ACFS_AGENT_MAIL_PORT."
@@ -514,6 +520,7 @@ cmd_start() {
 }
 
 cmd_stop() {
+    _agent_mail_mutation_admitted || return 1
     _initialize_bins
     _require_tmux
 
@@ -525,13 +532,6 @@ cmd_stop() {
 
     local stopped_any=false
     local rc=0
-
-    # The ACFS tmux session may own an Agent Mail fallback. Conservatively
-    # require admission before killing any such session so stop/restart cannot
-    # bypass the commissioning HOLD through the service manager.
-    if _native_agent_mail_is_active || _session_exists; then
-        _agent_mail_mutation_admitted || return 1
-    fi
 
     _info "Stopping ACFS services..."
 
@@ -570,6 +570,7 @@ cmd_stop() {
 }
 
 cmd_status() {
+    _agent_mail_mutation_admitted || return 1
     _initialize_bins
     _require_tmux
 

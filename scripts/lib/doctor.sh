@@ -2534,6 +2534,8 @@ check_stack() {
     local bv_path=""
     local am_bin=""
     local ru_bin=""
+    local br_contract="source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
+    local bv_contract="source_commit=95a706caf57fc5fde846a453da5f28677d4a81b8;version=v0.22.0;artifact_url=https://github.com/Dicklesworthstone/beads_viewer/releases/download/v0.22.0/bv_linux_arm64.tar.gz;archive_sha256=23d451b87bb9dccfb94fab416b0243d107919d9d56458087475afda5a617aa89;binary_sha256=ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320;selected_member=bv"
 
     section "Agent Flywheel stack"
 
@@ -2552,8 +2554,14 @@ check_stack() {
             "Re-run: $(fix_for_module stack.ultimate_bug_scanner)"
     fi
 
-    # Beads Viewer - custom check to detect gcloud 'bv' shadowing
-    if bv_path="$(doctor_binary_path bv 2>/dev/null || true)" && [[ -n "$bv_path" ]]; then
+    # Beads Viewer - exact policy, bytes, and version are required before an
+    # installed command can be accepted. This runs independently of the
+    # manifest-derived exact-version check below.
+    bv_path="$(doctor_binary_path bv 2>/dev/null || true)"
+    ACFS_CORE_POLICY_REASON=""
+    if declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \
+        && acfs_core_policy_admit_binary \
+            "stack.beads_viewer" doctor "$bv_contract" "$bv_path"; then
         local version
         # Check if the resolved bv is gcloud's BigQuery Visualizer
         if [[ "$bv_path" == *"google-cloud-sdk"* ]]; then
@@ -2572,8 +2580,9 @@ check_stack() {
             fi
         fi
     else
-        check "stack.bv" "Beads Viewer" "fail" "not found" \
-            "Re-run: $(fix_for_module stack.beads_viewer)"
+        check "stack.bv" "Beads Viewer" "fail" \
+            "${ACFS_CORE_POLICY_REASON:-HOLD: exact Beads Viewer policy, binary digest, and v0.22.0 identity are unavailable}" \
+            "HOLD: $(fix_for_module stack.beads_viewer)"
     fi
 
     # CASS - custom check
@@ -2745,13 +2754,17 @@ check_stack() {
     # only in the invoking shell does not create a false pass.
     local _br_bin=""
     _br_bin="$(doctor_binary_path br 2>/dev/null || true)"
-    if [[ -n "$_br_bin" ]]; then
+    ACFS_CORE_POLICY_REASON=""
+    if declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \
+        && acfs_core_policy_admit_binary \
+            "stack.beads_rust" doctor "$br_contract" "$_br_bin"; then
         local version
         version=$(get_version_line "$_br_bin")
         check "stack.beads_rust" "beads_rust ($version)" "pass" "installed"
     else
-        check "stack.beads_rust" "beads_rust (br)" "warn" "not installed" \
-            "Re-run: $(fix_for_module stack.beads_rust)"
+        check "stack.beads_rust" "beads_rust (br)" "fail" \
+            "${ACFS_CORE_POLICY_REASON:-HOLD: exact Beads Rust policy, binary digest, and v0.5.3 identity are unavailable}" \
+            "HOLD: $(fix_for_module stack.beads_rust)"
     fi
 
     # Check meta_skill (ms)
@@ -3053,8 +3066,8 @@ _is_bespoke_covered() {
         network.tailscale|network.tailscale.*|network.ssh_keepalive|network.ssh_keepalive.*) return 0 ;;
         # check_stack  (individual stack entries)
         stack.ntm|stack.slb|stack.mcp_agent_mail|stack.mcp_agent_mail.*) return 0 ;;
-        stack.ultimate_bug_scanner|stack.ultimate_bug_scanner.*|stack.beads_viewer) return 0 ;;
-        stack.beads_rust|stack.beads_rust.*|stack.cass|stack.cm|stack.cm.*|stack.caam) return 0 ;;
+        stack.ultimate_bug_scanner|stack.ultimate_bug_scanner.*) return 0 ;;
+        stack.cass|stack.cm|stack.cm.*|stack.caam) return 0 ;;
         stack.dcg|stack.dcg.*|stack.ru|stack.meta_skill|stack.meta_skill.*) return 0 ;;
         stack.brenner_bot|stack.rch|stack.wezterm_automata) return 0 ;;
         # check_stack  (acfs nightly timer — bespoke handles D-Bus gracefully)

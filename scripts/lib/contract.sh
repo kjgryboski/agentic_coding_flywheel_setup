@@ -105,22 +105,27 @@ acfs_core_policy_enforce() {
             return 1
             ;;
         stack.beads_rust)
-            expected_contract="source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"
+            expected_contract="source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
             if [[ "$supplied_contract" != "$expected_contract" ]]; then
                 ACFS_CORE_POLICY_REASON="stack.beads_rust immutable admission contract mismatch"
                 return 1
             fi
-            if [[ "${KNOWN_INSTALLERS[br]:-}" != "https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh" ]]; then
-                ACFS_CORE_POLICY_REASON="stack.beads_rust installer registry identity mismatch"
-                return 1
-            fi
-            installer_sha256="$(get_checksum br 2>/dev/null || true)"
-            if [[ -z "$installer_sha256" ]]; then
-                installer_sha256="${ACFS_UPSTREAM_SHA256[br]:-}"
-            fi
-            if [[ "$installer_sha256" != "b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f" ]]; then
-                ACFS_CORE_POLICY_REASON="stack.beads_rust installer checksum admission mismatch"
-                return 1
+            # Doctor has no mutation authority and verifies the installed
+            # binary below. Mutating routes must additionally prove that the
+            # loaded installer registry still names the pinned source bytes.
+            if [[ "$operation" != "doctor" ]]; then
+                if [[ "${KNOWN_INSTALLERS[br]:-}" != "https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh" ]]; then
+                    ACFS_CORE_POLICY_REASON="stack.beads_rust installer registry identity mismatch"
+                    return 1
+                fi
+                installer_sha256="$(get_checksum br 2>/dev/null || true)"
+                if [[ -z "$installer_sha256" ]]; then
+                    installer_sha256="${ACFS_UPSTREAM_SHA256[br]:-}"
+                fi
+                if [[ "$installer_sha256" != "b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f" ]]; then
+                    ACFS_CORE_POLICY_REASON="stack.beads_rust installer checksum admission mismatch"
+                    return 1
+                fi
             fi
             ;;
         stack.beads_viewer)
@@ -143,6 +148,106 @@ acfs_core_policy_reason() {
     printf '%s\n' "${ACFS_CORE_POLICY_REASON:-core admission policy unavailable}"
 }
 
+acfs_core_policy_expected_binary_sha256() {
+    case "${1:-}" in
+        stack.beads_rust)
+            printf '%s\n' "f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
+            ;;
+        stack.beads_viewer)
+            printf '%s\n' "ee1dd03701a33d86e6496fb7021a96461e3c172e2a8be5b2ced554c7c378b320"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+_acfs_core_policy_sha256_file() {
+    local binary_path="${1:-}"
+    local output=""
+    local actual_sha256=""
+
+    [[ -n "$binary_path" ]] || return 1
+    if [[ -x /usr/bin/sha256sum ]]; then
+        output="$(/usr/bin/sha256sum "$binary_path" 2>/dev/null)" || return 1
+    elif [[ -x /usr/bin/shasum ]]; then
+        output="$(/usr/bin/shasum -a 256 "$binary_path" 2>/dev/null)" || return 1
+    else
+        return 1
+    fi
+
+    read -r actual_sha256 _ <<< "$output"
+    [[ "$actual_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$actual_sha256"
+}
+
+_acfs_core_policy_version_output() {
+    local binary_path="${1:-}"
+
+    [[ -n "$binary_path" ]] || return 1
+    if [[ -x /usr/bin/timeout ]]; then
+        /usr/bin/timeout 5 "$binary_path" --version 2>&1
+    else
+        "$binary_path" --version 2>&1
+    fi
+}
+
+# Admit an installed core binary only after the caller's immutable source
+# contract, its exact bytes, and its pinned version all agree. The digest is
+# checked before executing the binary, so an arbitrary PATH entry cannot run
+# merely because doctor or an installer wants to inspect its version.
+acfs_core_policy_admit_binary() {
+    local module_id="${1:-}"
+    local operation="${2:-}"
+    local supplied_contract="${3:-}"
+    local binary_path="${4:-}"
+    local expected_sha256=""
+    local actual_sha256=""
+    local version_output=""
+    local version_pattern=""
+
+    acfs_core_policy_enforce "$module_id" "$operation" "$supplied_contract" || return $?
+
+    if [[ -z "$binary_path" || "$binary_path" != /* || ! -f "$binary_path" || ! -x "$binary_path" ]]; then
+        ACFS_CORE_POLICY_REASON="$module_id admitted binary is unavailable or unsafe"
+        return 1
+    fi
+
+    expected_sha256="$(acfs_core_policy_expected_binary_sha256 "$module_id" 2>/dev/null || true)"
+    if [[ -z "$expected_sha256" ]]; then
+        ACFS_CORE_POLICY_REASON="$module_id has no pinned binary digest"
+        return 1
+    fi
+
+    actual_sha256="$(_acfs_core_policy_sha256_file "$binary_path" 2>/dev/null || true)"
+    if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+        ACFS_CORE_POLICY_REASON="$module_id installed binary digest mismatch"
+        return 1
+    fi
+
+    case "$module_id" in
+        stack.beads_rust)
+            version_pattern='(^|[[:space:]])v?0[.]5[.]3([[:space:]]|$)'
+            ;;
+        stack.beads_viewer)
+            version_pattern='(^|[[:space:]])v?0[.]22[.]0([[:space:]]|$)'
+            ;;
+        *)
+            ACFS_CORE_POLICY_REASON="$module_id has no pinned binary version"
+            return 1
+            ;;
+    esac
+
+    version_output="$(_acfs_core_policy_version_output "$binary_path" 2>/dev/null || true)"
+    if [[ ! "$version_output" =~ $version_pattern ]]; then
+        ACFS_CORE_POLICY_REASON="$module_id installed binary version mismatch"
+        return 1
+    fi
+
+    ACFS_CORE_POLICY_REASON=""
+    return 0
+}
+
 # Guard the generic verified-installer helpers as well as their named callers.
 # This closes direct helper invocation as a bypass: Agent Mail remains held,
 # br requires the exact pinned execution argv, and bv is available only through
@@ -158,7 +263,7 @@ acfs_core_policy_enforce_installer_execution() {
     local target_home="${3:-}"
     shift 3
 
-    local br_contract="source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"
+    local br_contract="source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
     local -a expected_br_args=()
     local -a supplied_args=("$@")
     local index=0

@@ -2140,27 +2140,36 @@ install_beads_rust() {
     local tool="br"
 
     _stack_enforce_core_policy "stack.beads_rust" install \
-        "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb" || return 1
+        "source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123" || return 1
 
-    if _stack_is_installed "$tool"; then
+    local target_home=""
+    local br_binary=""
+    local br_contract="source_commit=7eaf34b76927b4deadc913889f50fb06a8f803d7;installer_url=https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/7eaf34b76927b4deadc913889f50fb06a8f803d7/install.sh;installer_sha256=b2b3ed0ae2712e53a72d48afd5a980a7c1d346bb6e6b9fb9e4f3b20566726c2f;version=v0.5.3;artifact_url=https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz;artifact_sha256=9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb;binary_sha256=f7d105e685da6c49dd87b0335d11d5fe2aa8765033a78cfbfb00dee7a4b1e123"
+
+    target_home="$(_stack_target_home "${TARGET_USER:-ubuntu}")" || return 1
+    br_binary="$target_home/.local/bin/br"
+
+    if declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \
+        && acfs_core_policy_admit_binary \
+            "stack.beads_rust" install "$br_contract" "$br_binary"; then
         log_detail "${STACK_NAMES[$tool]} already installed"
         return 0
     fi
 
     log_detail "Installing ${STACK_NAMES[$tool]}..."
 
-    local target_home=""
-    target_home="$(_stack_target_home "${TARGET_USER:-ubuntu}")" || return 1
-
     if _stack_run_verified_installer "$tool" \
         --version v0.5.3 \
         --dest "$target_home/.local/bin" \
         --artifact-url "https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.3/br-0.5.3-linux_aarch64.tar.gz" \
         --checksum "9781aec596be155dfff31c0ab4d140d076107422e0e703c5137b2d2edcff4bfb"; then
-        if _stack_is_installed "$tool"; then
+        if declare -f acfs_core_policy_admit_binary >/dev/null 2>&1 \
+            && acfs_core_policy_admit_binary \
+                "stack.beads_rust" install "$br_contract" "$br_binary"; then
             log_success "${STACK_NAMES[$tool]} installed"
             return 0
         fi
+        log_error "${ACFS_CORE_POLICY_REASON:-Beads Rust binary identity is not admitted}"
     fi
 
     log_warn "${STACK_NAMES[$tool]} installation may have failed"
