@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 shopt -s lastpipe 2>/dev/null || true
 umask 022
@@ -117,7 +117,7 @@ die() {
 }
 
 safe_git() {
-    env -i \
+    /usr/bin/env -i \
         HOME="$HOME" \
         PATH=/usr/bin:/bin:/usr/sbin:/sbin \
         TMPDIR="${TMPDIR:-/tmp}" \
@@ -618,7 +618,7 @@ PY
 }
 
 sha256_file() {
-    shasum -a 256 "$1" | awk '{print $1}'
+    /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
 }
 
 publish_private_file() {
@@ -1902,7 +1902,7 @@ repository_control_command() {
     [[ "$tree_entry" =~ ^100(644|755)[[:space:]]blob[[:space:]][0-9a-f]{40}[[:space:]] ]] \
         || die 3 "repository control committed source is unavailable"
     safe_git -C "$root" show "$head:scripts/flywheel-repository-control.py" \
-        | cmp -s - "$script" \
+        | /usr/bin/cmp -s - "$script" \
         || die 2 "repository control working bytes differ from the exact committed source"
     ensure_temp_root
     script="$TEMP_ROOT/flywheel-repository-control.py"

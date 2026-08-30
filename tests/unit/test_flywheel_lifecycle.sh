@@ -19,7 +19,7 @@ printf 'ok\n' >"$QUERY_FILE"
 : >"$CALLS"
 
 cat >"$TEST_ROOT/limactl" <<'SH'
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 case "${1:-}" in
     list)
@@ -241,7 +241,7 @@ esac
 SH
 
 cat >"$TEST_ROOT/heavy-run" <<'SH'
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
 [[ "${1:-}" == "--stateful" && "${2:-}" == "--" ]]
@@ -376,11 +376,43 @@ chmod 0700 "$FLYWHEEL_STATE_HOME"
 printf 'do-not-overwrite\n' >"$TEST_ROOT/symlink-target"
 ln -s "$TEST_ROOT/symlink-target" "$FLYWHEEL_STATE_HOME/source-root"
 ln -s "$TEST_ROOT/symlink-target" "$FLYWHEEL_STATE_HOME/installation.json"
-HOME="$TEST_ROOT/home" "$REPO_ROOT/flywheel" mac install --quiet
+# Ambient PATH cannot replace the launcher interpreter, the environment
+# isolation boundary, or the helpers that bind installation hashes.
+HOST_SHIM_DIR="$TEST_ROOT/host-path-shims"
+HOST_SHIM_SENTINEL="$TEST_ROOT/host-path-shim-ran"
+mkdir -p "$HOST_SHIM_DIR"
+for host_shim in bash env shasum awk; do
+    cat >"$HOST_SHIM_DIR/$host_shim" <<SH
+#!/bin/sh
+printf '%s\n' '$host_shim' >>'$HOST_SHIM_SENTINEL'
+exit 97
+SH
+    chmod 0755 "$HOST_SHIM_DIR/$host_shim"
+done
+PATH="$HOST_SHIM_DIR:$PATH" \
+    HOME="$TEST_ROOT/home" "$REPO_ROOT/flywheel" mac install --quiet
+[[ ! -e "$HOST_SHIM_SENTINEL" ]]
 [[ ! -L "$FLYWHEEL_STATE_HOME/source-root" ]]
 [[ ! -L "$FLYWHEEL_STATE_HOME/installation.json" ]]
 [[ "$(<"$TEST_ROOT/symlink-target")" == "do-not-overwrite" ]]
 cmp -s "$QUALIFICATION_ROOT/flywheel" "$TEST_ROOT/home/.local/bin/flywheel"
+
+# The same hostile PATH cannot hide modified tracked source bytes or allow the
+# heavy convergence boundary to run.
+printf '\n# host PATH shim drift\n' >>"$QUALIFICATION_ROOT/scripts/lib/contract.sh"
+: >"$CALLS"
+host_path_dirty_rc=0
+PATH="$HOST_SHIM_DIR:$PATH" \
+    HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" mac install --quiet \
+    >"$TEST_ROOT/host-path-dirty.out" 2>&1 || host_path_dirty_rc=$?
+[[ "$host_path_dirty_rc" -eq 2 ]]
+[[ ! -e "$HOST_SHIM_SENTINEL" ]]
+if grep -F -- '--stateful --' "$CALLS" >/dev/null; then
+    printf 'host PATH shim bypass unexpectedly entered the heavy lifecycle guard\n' >&2
+    exit 1
+fi
+git -C "$QUALIFICATION_ROOT" show HEAD:scripts/lib/contract.sh \
+    >"$QUALIFICATION_ROOT/scripts/lib/contract.sh"
 # The installed entrypoint must be able to converge again. Historically it
 # tried to install itself onto itself and failed after the guest had succeeded.
 HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" mac install --quiet
