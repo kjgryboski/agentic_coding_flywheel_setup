@@ -13,6 +13,9 @@ VM_TEMPLATE_RELATIVE="config/flywheel-lima.yaml"
 HEAVY_RUN="${FLYWHEEL_HEAVY_RUN:-$HOME/.local/bin/codex-heavy-run}"
 LIMACTL="${FLYWHEEL_LIMACTL:-$(command -v limactl 2>/dev/null || true)}"
 ROLLOUT_RECEIPT="${FLYWHEEL_ROLLOUT_RECEIPT:-}"
+PILOT_RECEIPT=""
+PILOT_SOURCE=""
+TARGET_REPOSITORY=""
 QUIET=0
 JSON=0
 NO_GUM=0
@@ -40,11 +43,15 @@ Usage:
   flywheel capabilities --json
   flywheel robot-docs guide
   flywheel repository inspect PATH [--json]
+  flywheel repository eligibility PATH --pilot-receipt FILE --pilot-source PATH --target-repository OWNER/REPOSITORY [--json]
   flywheel rollout plan INVENTORY.json [--json]
 
 Options:
   --json                  machine-readable read-side output
   --rollout-receipt FILE  attach one repository rollout evidence receipt
+  --pilot-receipt FILE    sealed Ops synthetic-pilot receipt
+  --pilot-source PATH     exact clean Ops source checkout bound by the pilot
+  --target-repository ID  expected GitHub target as OWNER/REPOSITORY
   --quiet                 suppress non-error progress
   --no-gum                disable optional gum formatting
   -h, --help              show this help
@@ -511,6 +518,7 @@ status_command() {
     local tree=""
     local source_clean="false"
     local authority=""
+    local repository_control=""
     local qualification_json=""
     local doctor_json=""
     local status_json=""
@@ -521,6 +529,7 @@ status_command() {
         head="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
         tree="$(git -C "$root" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
         authority="$root/config/flywheel-partial-safe-allowlist.json"
+        repository_control="$root/scripts/flywheel-repository-control.py"
         if [[ -f "$root/config/flywheel-license-clearance.json" ]]; then
             authority="$root/config/flywheel-license-clearance.json"
         fi
@@ -537,10 +546,12 @@ status_command() {
         doctor_json="$(doctor_command --json-internal 2>/dev/null)"
         set -e
     fi
-    status_json="$(python3 - "$probe" "$root" "$head" "$tree" "$source_clean" "$INSTALL_RECEIPT" "$authority" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
+    status_json="$(python3 - "$probe" "$root" "$head" "$tree" "$source_clean" "$INSTALL_RECEIPT" "$authority" "$repository_control" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
 import hashlib
 import json
+import os
 import pathlib
+import stat
 import sys
 
 (
@@ -551,6 +562,7 @@ import sys
     source_clean_raw,
     install_receipt_path,
     authority_path,
+    repository_control_path,
     rollout_receipt_path,
     qualification_raw,
     doctor_raw,
@@ -565,16 +577,42 @@ vm["healthy"] = bool(
     and vm.get("contract", {}).get("matches") is True
 )
 
-def read_json(path):
-    if not path:
-        return None
+def stable_read(path, maximum_bytes, label):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags)
     try:
-        candidate = pathlib.Path(path)
-        if candidate.is_symlink() or not candidate.is_file():
-            return None
-        return json.loads(candidate.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"{label} must be a regular file")
+        if before.st_size > maximum_bytes:
+            raise ValueError(f"{label} exceeds {maximum_bytes} bytes")
+        chunks = []
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(65536, remaining))
+            if not block:
+                raise ValueError(f"{label} ended while being read")
+            chunks.append(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1):
+            raise ValueError(f"{label} grew while being read")
+        after = os.fstat(descriptor)
+        before_identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        if before_identity != after_identity:
+            raise ValueError(f"{label} changed while being read")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+def read_json(path, label):
+    if not path:
+        return None, None
+    try:
+        raw = stable_read(path, 4 * 1024 * 1024, label)
+        return json.loads(raw), raw
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return None, None
 
 def is_hex(value, length):
     return isinstance(value, str) and len(value) == length and all(character in "0123456789abcdef" for character in value)
@@ -589,7 +627,8 @@ def parse_json(raw, schema):
             pass
     return {"schema": schema, "status": "not_run"}
 
-authority = read_json(authority_path) or {}
+authority, authority_raw = read_json(authority_path, "commissioning authority")
+authority = authority or {}
 license_cleared = authority.get("schema") == "agent-flywheel.license-clearance/v1"
 if license_cleared:
     commissioning = authority.get("commissioning", {})
@@ -608,11 +647,8 @@ else:
     expected_authority_kind = "partial_safe_allowlist"
     licensing_cleared = 0
     licensing_pending = held.get("count", 0)
-try:
-    current_authority_sha256 = hashlib.sha256(pathlib.Path(authority_path).read_bytes()).hexdigest()
-except OSError:
-    current_authority_sha256 = None
-installation_raw = read_json(install_receipt_path)
+current_authority_sha256 = hashlib.sha256(authority_raw).hexdigest() if authority_raw is not None else None
+installation_raw, _ = read_json(install_receipt_path, "installation receipt")
 if not isinstance(installation_raw, dict):
     installation = {
         "schema": "agent-flywheel.installation/v1",
@@ -684,98 +720,25 @@ installation["matches_current_authority"] = authority_exact
 
 rollout = {"status": "not_connected"}
 if rollout_receipt_path:
-    path = pathlib.Path(rollout_receipt_path)
     try:
-        if path.is_symlink() or not path.is_file():
-            raise ValueError("receipt must be a regular non-symlink file")
-        raw = path.read_bytes()
-        value = json.loads(raw)
-        if not isinstance(value, dict):
-            raise ValueError("receipt root is not an object")
-        schema = value.get("schema")
-        if schema == "agent-flywheel.repository-rollout/v1":
-            if (
-                not isinstance(value.get("status"), str)
-                or not isinstance(value.get("scope"), str)
-                or not isinstance(value.get("repository"), str)
-                or not isinstance(value.get("bookclub_eligible"), bool)
-            ):
-                raise ValueError("repository rollout receipt fields are invalid")
-            rollout = {
-                "status": "evidence_connected",
-                "receipt_sha256": hashlib.sha256(raw).hexdigest(),
-                "schema": schema,
-                "declared_status": value["status"],
-                "scope": value["scope"],
-                "repository": value["repository"],
-                "bookclub_eligible": value["bookclub_eligible"],
-            }
-        elif schema == "ops-steward.github-admission-synthetic-pilot-receipt/v1":
-            receipt_digest = value.get("receipt_sha256")
-            digest_source = dict(value)
-            digest_source.pop("receipt_sha256", None)
-            observed_receipt_digest = hashlib.sha256(
-                (json.dumps(digest_source, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
-            ).hexdigest()
-            git = value.get("git")
-            if (
-                not isinstance(receipt_digest, str)
-                or receipt_digest != observed_receipt_digest
-                or value.get("verdict") not in {"PASS", "FAIL"}
-                or value.get("qualification_scope") != "synthetic-pilot-only"
-                or not isinstance(value.get("bookclub_eligible"), bool)
-                or value.get("external_mutation") is not False
-                or not isinstance(value.get("repository"), str)
-                or not isinstance(git, dict)
-                or git.get("clean") is not True
-            ):
-                raise ValueError("synthetic pilot receipt content binding is invalid")
-            rollout = {
-                "status": "evidence_connected",
-                "receipt_sha256": hashlib.sha256(raw).hexdigest(),
-                "schema": schema,
-                "declared_status": "pass" if value["verdict"] == "PASS" else "fail",
-                "scope": value["qualification_scope"],
-                "repository": value["repository"],
-                "bookclub_eligible": value["bookclub_eligible"],
-                "external_mutation": False,
-                "git": git,
-            }
-        elif schema == "agent-flywheel.progressive-rollout-plan/v1":
-            plan_digest = value.get("plan_sha256")
-            digest_source = dict(value)
-            digest_source.pop("plan_sha256", None)
-            observed_plan_digest = hashlib.sha256(
-                (json.dumps(digest_source, sort_keys=True, separators=(",", ":")) + "\n").encode()
-            ).hexdigest()
-            cohorts = value.get("cohorts")
-            if (
-                not isinstance(plan_digest, str)
-                or plan_digest != observed_plan_digest
-                or not isinstance(cohorts, list)
-                or not cohorts
-                or any(not isinstance(item, dict) or not isinstance(item.get("repository"), dict) for item in cohorts)
-            ):
-                raise ValueError("progressive rollout plan content binding is invalid")
-            repositories = [item["repository"] for item in cohorts]
-            rollout = {
-                "status": "evidence_connected",
-                "receipt_sha256": hashlib.sha256(raw).hexdigest(),
-                "schema": schema,
-                "declared_status": value.get("status"),
-                "scope": "plan-only",
-                "execution_status": value.get("execution_status"),
-                "mutation_authorized": value.get("mutation_authorized"),
-                "repository": repositories[0] if len(repositories) == 1 else None,
-                "repositories": repositories,
-                "repository_count": len(repositories),
-                "setup_pr_eligible": all(item.get("setup_pr_eligible") is True for item in cohorts),
-                "live_rollout_eligible": all(item.get("live_rollout_eligible") is True for item in cohorts),
-                "bookclub_eligible": None,
-            }
-        else:
-            raise ValueError("unsupported rollout receipt schema")
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        if (
+            not source_clean
+            or not source_exact
+            or installation.get("status") != "recorded"
+            or not authority_exact
+        ):
+            raise ValueError(
+                "repository receipt validator requires the clean exact source recorded by the installation receipt"
+            )
+        control_path = pathlib.Path(repository_control_path)
+        control_raw = stable_read(control_path, 4 * 1024 * 1024, "repository receipt validator")
+        control_namespace = {
+            "__file__": str(control_path),
+            "__name__": "flywheel_repository_control",
+        }
+        exec(compile(control_raw, str(control_path), "exec"), control_namespace)
+        rollout = control_namespace["consume_rollout_receipt"](rollout_receipt_path)
+    except (ImportError, KeyError, OSError, SyntaxError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         rollout = {"status": "invalid", "error": str(error)}
 
 blockers = []
@@ -989,12 +952,14 @@ print(json.dumps({
         {"command": "flywheel capabilities --json", "kind": "read"},
         {"command": "flywheel robot-docs guide", "kind": "read"},
         {"command": "flywheel repository inspect PATH --json", "kind": "read"},
+        {"command": "flywheel repository eligibility PATH --pilot-receipt FILE --pilot-source PATH --target-repository OWNER/REPOSITORY --json", "kind": "read"},
         {"command": "flywheel rollout plan INVENTORY.json --json", "kind": "read"},
     ],
     "feature_flags": {
         "mac_ubuntu_vm": True,
         "portable_qualification_host": True,
         "repository_rollout_receipt": True,
+        "repository_live_pilot_eligibility": True,
         "license_clearance_receipt": license_cleared,
         "licensing_held_modules_executable": license_cleared,
         "independent_qualification_holds_enforced": True,
@@ -1035,6 +1000,8 @@ Agent Flywheel operator guide
    flywheel repository inspect PATH --json
 8. Build a non-mutating progressive cohort plan:
    flywheel rollout plan INVENTORY.json --json
+9. Bind a sealed Ops pilot to one exact clean canonical-main target without authorizing mutation:
+   flywheel repository eligibility PATH --pilot-receipt FILE --pilot-source PATH --target-repository OWNER/REPOSITORY --json
 
 The status document reports exact source and bundle identities, current host
 qualification, installed modules, independent holds, repository rollout
@@ -1053,6 +1020,15 @@ repository_control_command() {
     script="$root/scripts/flywheel-repository-control.py"
     [[ -f "$script" && ! -L "$script" ]] \
         || die 3 "repository control is unavailable; rerun flywheel mac install from the current source"
+    if [[ "$action" == "eligibility" ]]; then
+        [[ -n "$PILOT_RECEIPT" && -n "$PILOT_SOURCE" && -n "$TARGET_REPOSITORY" ]] \
+            || die 2 "repository eligibility requires --pilot-receipt, --pilot-source, and --target-repository"
+        arguments+=(
+            --pilot-receipt "$PILOT_RECEIPT"
+            --pilot-source "$PILOT_SOURCE"
+            --target-repository "$TARGET_REPOSITORY"
+        )
+    fi
     ((JSON == 1)) && arguments+=(--json)
     python3 "$script" "${arguments[@]}"
 }
@@ -1079,6 +1055,21 @@ while (($#)); do
             ROLLOUT_RECEIPT="$2"
             shift
             ;;
+        --pilot-receipt)
+            (($# >= 2)) || die 2 "--pilot-receipt requires a file"
+            PILOT_RECEIPT="$2"
+            shift
+            ;;
+        --pilot-source)
+            (($# >= 2)) || die 2 "--pilot-source requires a path"
+            PILOT_SOURCE="$2"
+            shift
+            ;;
+        --target-repository)
+            (($# >= 2)) || die 2 "--target-repository requires OWNER/REPOSITORY"
+            TARGET_REPOSITORY="$2"
+            shift
+            ;;
         --quiet) QUIET=1 ;;
         --no-gum) NO_GUM=1 ;;
         -h|--help) usage; exit 0 ;;
@@ -1100,6 +1091,11 @@ case "$command_name:$subcommand" in
         [[ -n "$resource" ]] \
             || die 2 "repository inspect requires a path; run flywheel repository inspect PATH --json"
         repository_control_command inspect "$resource"
+        ;;
+    repository:eligibility)
+        [[ -n "$resource" ]] \
+            || die 2 "repository eligibility requires a path"
+        repository_control_command eligibility "$resource"
         ;;
     rollout:plan)
         [[ -n "$resource" ]] \

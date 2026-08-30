@@ -71,6 +71,11 @@ flywheel stop
 flywheel capabilities --json
 flywheel robot-docs guide
 flywheel repository inspect /path/to/repository --json
+flywheel repository eligibility /path/to/repository \
+  --pilot-receipt /path/to/ops-synthetic-pilot.json \
+  --pilot-source /path/to/clean/ops-steward \
+  --target-repository owner/repository \
+  --json
 flywheel rollout plan /path/to/inventory.json --json
 ```
 
@@ -82,7 +87,14 @@ module counts, current blockers, and an optional repository rollout receipt.
 Repository inspection and rollout planning are read-only: they inventory exact
 Git identity, existing guidance, automation, dirty state, and `.acfs-new`
 conflicts, then produce content-addressed cohort plans without creating a
-branch, PR, check, or provider mutation.
+branch, PR, check, or provider mutation. Repository eligibility is also
+read-only. It accepts only the producer-sealed Ops synthetic-pilot contract,
+revalidates the embedded receipt against its current clean source and evidence,
+and binds it to a clean `main` checkout exactly matching the locally observed
+`origin/main`, GitHub origin identity, and root `AGENTS.md` digest. Its outcome
+is only `eligible_for_separately_authorized_live_pilot`; it always records
+`mutation_authorized=false` and `live_rollout_passed=false`. A generic local
+`agent-flywheel.repository-rollout/v1` JSON file is not trusted as live proof.
 
 > **Production environments:** For stable, reproducible installs, pin to a tagged release or specific commit:
 > ```bash
