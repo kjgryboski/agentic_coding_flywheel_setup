@@ -472,7 +472,7 @@ acfs_generated_install_agents_claude() {
         fi
     fi
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: install: for candidate in \"\$HOME/.claude/bin/claude\" \"\$HOME/.claude/local/bin/claude\" \"\$HOME/.bun/bin/claude\"; do (target_user)"
+        log_info "dry-run: install: for candidate in \"\$HOME/.local/bin/claude\" \"\$HOME/.claude/bin/claude\" \"\$HOME/.claude/local/bin/claude\" \"\$HOME/.bun/bin/claude\"; do (target_user)"
     else
         if ! run_as_target_shell <<'INSTALL_AGENTS_CLAUDE'
 # Generated helper functions used by this child shell.
@@ -634,7 +634,7 @@ acfs_install_executable_into_primary_bin() {
 }
 
 claude_candidate=""
-for candidate in "$HOME/.claude/bin/claude" "$HOME/.claude/local/bin/claude" "$HOME/.bun/bin/claude"; do
+for candidate in "$HOME/.local/bin/claude" "$HOME/.claude/bin/claude" "$HOME/.claude/local/bin/claude" "$HOME/.bun/bin/claude"; do
   if [[ -x "$candidate" ]]; then
     claude_candidate="$candidate"
     break
@@ -647,10 +647,13 @@ if [[ -z "$claude_candidate" ]] || [[ ! -x "$claude_candidate" ]]; then
   echo "Claude Code: installed but no runnable claude binary found" >&2
   exit 1
 fi
-acfs_link_primary_bin_command "$claude_candidate" "claude"
+claude_target="${ACFS_BIN_DIR:-$HOME/.local/bin}/claude"
+if [[ "$claude_candidate" != "$claude_target" ]]; then
+  acfs_link_primary_bin_command "$claude_candidate" "claude"
+fi
 INSTALL_AGENTS_CLAUDE
         then
-            log_error "agents.claude: install command failed: for candidate in \"\$HOME/.claude/bin/claude\" \"\$HOME/.claude/local/bin/claude\" \"\$HOME/.bun/bin/claude\"; do"
+            log_error "agents.claude: install command failed: for candidate in \"\$HOME/.local/bin/claude\" \"\$HOME/.claude/bin/claude\" \"\$HOME/.claude/local/bin/claude\" \"\$HOME/.bun/bin/claude\"; do"
             return 1
         fi
     fi

@@ -443,6 +443,28 @@ INSTALL_CLI_MODERN
         fi
     fi
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
+        log_info "dry-run: install: if ! command -v bat >/dev/null 2>&1 && command -v batcat >/dev/null 2>&1; then ln -sf \"\$(command -v batcat)\" /usr/local/bin/bat; fi (root)"
+    else
+        if ! run_as_root_shell <<'INSTALL_CLI_MODERN'
+if ! command -v bat >/dev/null 2>&1 && command -v batcat >/dev/null 2>&1; then ln -sf "$(command -v batcat)" /usr/local/bin/bat; fi
+INSTALL_CLI_MODERN
+        then
+            log_error "cli.modern: install command failed: if ! command -v bat >/dev/null 2>&1 && command -v batcat >/dev/null 2>&1; then ln -sf \"\$(command -v batcat)\" /usr/local/bin/bat; fi"
+            return 1
+        fi
+    fi
+    if [[ "${DRY_RUN:-false}" = "true" ]]; then
+        log_info "dry-run: install: if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then ln -sf \"\$(command -v fdfind)\" /usr/local/bin/fd; fi (root)"
+    else
+        if ! run_as_root_shell <<'INSTALL_CLI_MODERN'
+if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then ln -sf "$(command -v fdfind)" /usr/local/bin/fd; fi
+INSTALL_CLI_MODERN
+        then
+            log_error "cli.modern: install command failed: if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then ln -sf \"\$(command -v fdfind)\" /usr/local/bin/fd; fi"
+            return 1
+        fi
+    fi
+    if [[ "${DRY_RUN:-false}" = "true" ]]; then
         log_info "dry-run: install: apt-get -o DPkg::Lock::Timeout=120 install -y btop || true (root)"
     else
         if ! run_as_root_shell <<'INSTALL_CLI_MODERN'
@@ -603,6 +625,26 @@ INSTALL_CLI_MODERN
     else
         if ! run_as_root_shell <<'INSTALL_CLI_MODERN'
 command -v lsd || command -v eza
+INSTALL_CLI_MODERN
+        then
+            log_warn "Optional verify failed: cli.modern"
+        fi
+    fi
+    if [[ "${DRY_RUN:-false}" = "true" ]]; then
+        log_info "dry-run: verify (optional): command -v bat || command -v batcat (root)"
+    else
+        if ! run_as_root_shell <<'INSTALL_CLI_MODERN'
+command -v bat || command -v batcat
+INSTALL_CLI_MODERN
+        then
+            log_warn "Optional verify failed: cli.modern"
+        fi
+    fi
+    if [[ "${DRY_RUN:-false}" = "true" ]]; then
+        log_info "dry-run: verify (optional): command -v fd || command -v fdfind (root)"
+    else
+        if ! run_as_root_shell <<'INSTALL_CLI_MODERN'
+command -v fd || command -v fdfind
 INSTALL_CLI_MODERN
         then
             log_warn "Optional verify failed: cli.modern"

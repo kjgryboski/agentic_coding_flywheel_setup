@@ -51,11 +51,6 @@ if [[ "$LICENSE_CLEARED" == "true" ]]; then
     install -o ubuntu -g ubuntu -m 0444 "$SOURCE_CLEARANCE" "$DOCTOR_CLEARANCE"
 fi
 
-sudo -u ubuntu env \
-    HOME="$TARGET_HOME" \
-    FLYWHEEL_SOURCE_ROOT="$SOURCE_ROOT" \
-    bash -p "$SOURCE_ROOT/scripts/flywheel-qualification-host.sh" --json >/dev/null
-
 doctor() {
     local -a authority_env=(ACFS_PARTIAL_SAFE_ALLOWLIST_FILE="$DOCTOR_ALLOWLIST")
     if [[ "$LICENSE_CLEARED" == "true" ]]; then
@@ -80,6 +75,17 @@ doctor_partial_safe() {
         FLYWHEEL_SOURCE_ROOT="$SOURCE_ROOT" \
         ACFS_PARTIAL_SAFE_ALLOWLIST_FILE="$DOCTOR_ALLOWLIST" \
         bash -p "$SOURCE_ROOT/scripts/flywheel-partial-safe-doctor.sh" --json
+}
+
+exit_if_existing_state_is_healthy() {
+    [[ -f "$ACTIVE_STATE" ]] || return 1
+    doctor || return 1
+    if [[ "$LICENSE_CLEARED" == "true" ]]; then
+        printf '{"action":"unchanged","claim":"LICENSE_CLEARED_PARTIAL","status":"pass"}\n'
+    else
+        printf '{"action":"unchanged","claim":"PARTIAL_SAFE","status":"pass"}\n'
+    fi
+    return 0
 }
 
 state_sha256() {
@@ -161,18 +167,21 @@ finalize_w3_transition() {
 
 trap restore_w3_transition EXIT
 
+bash -p "$SOURCE_ROOT/scripts/flywheel-ensure-swap.sh"
+sudo -u ubuntu env \
+    HOME="$TARGET_HOME" \
+    FLYWHEEL_SOURCE_ROOT="$SOURCE_ROOT" \
+    bash -p "$SOURCE_ROOT/scripts/flywheel-qualification-host.sh" --json >/dev/null
+if exit_if_existing_state_is_healthy; then
+    exit 0
+fi
+
 apt-get -o Acquire::Retries=3 update
 apt-get -o DPkg::Lock::Timeout=120 install -y \
     curl git ca-certificates unzip tar xz-utils jq build-essential gnupg lsb-release
-bash -p "$SOURCE_ROOT/scripts/flywheel-ensure-swap.sh"
 
 if [[ -f "$ACTIVE_STATE" ]]; then
-    if doctor; then
-        if [[ "$LICENSE_CLEARED" == "true" ]]; then
-            printf '{"action":"unchanged","claim":"LICENSE_CLEARED_PARTIAL","status":"pass"}\n'
-        else
-            printf '{"action":"unchanged","claim":"PARTIAL_SAFE","status":"pass"}\n'
-        fi
+    if exit_if_existing_state_is_healthy; then
         exit 0
     fi
     if [[ "$LICENSE_CLEARED" != "true" ]]; then

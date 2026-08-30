@@ -6,7 +6,7 @@
 # ============================================================
 # Data-only manifest index. Safe to source.
 
-ACFS_MANIFEST_SHA256="b2d66c80dbc1c262b399672ed9a392c07b650080e017c9e449180ebc3ef86f1a"
+ACFS_MANIFEST_SHA256="29d83fc76566c146419c38bcb2810e3f22ff981f0b19c6e77b752e8f5a2994aa"
 
 ACFS_MODULES_IN_ORDER=(
   "base.system"
@@ -721,7 +721,7 @@ declare -gA ACFS_MODULE_INSTALLED_CHECK=(
   ['base.filesystem']="test -d /data/projects && test -d ~/.acfs"
   ['shell.zsh']="command -v zsh"
   ['shell.omz']="test -d ~/.oh-my-zsh && test -f ~/.acfs/zsh/acfs.zshrc"
-  ['cli.modern']="command -v rg && command -v tmux && command -v fzf"
+  ['cli.modern']="command -v rg && command -v tmux && command -v fzf && command -v direnv && command -v jq && command -v gh && command -v git-lfs && command -v lsof && command -v dig && command -v nc && command -v strace && command -v rsync"
   ['tools.lazygit']="command -v lazygit"
   ['tools.lazydocker']="command -v lazydocker"
   ['network.tailscale']="command -v tailscale"

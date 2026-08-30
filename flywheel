@@ -446,12 +446,17 @@ PY
 install_command() {
     require_mac_tools
     local root=""
+    local source_cli=""
+    local installed_cli="$HOME/.local/bin/flywheel"
     local head=""
     local tree=""
     local guest_root=""
     local bundle_sha256=""
     local stage_result=""
     root="$(source_root)"
+    source_cli="$root/flywheel"
+    [[ -f "$source_cli" && ! -L "$source_cli" ]] \
+        || die 2 "source checkout has no regular flywheel launcher"
     git -C "$root" diff --quiet \
         || die 2 "source checkout has uncommitted changes; commit or preserve them before flywheel mac install"
     git -C "$root" diff --cached --quiet \
@@ -482,7 +487,11 @@ install_command() {
     printf '%s\n' "$root" >"$TEMP_ROOT/source-root"
     publish_private_file "$TEMP_ROOT/source-root" "$SOURCE_POINTER"
     write_install_receipt "$root" "$head" "$tree" "$guest_root" "$bundle_sha256"
-    install -m 0755 "$SELF" "$HOME/.local/bin/flywheel"
+    if [[ -e "$installed_cli" && "$source_cli" -ef "$installed_cli" ]]; then
+        chmod 0755 "$installed_cli"
+    else
+        install -m 0755 "$source_cli" "$installed_cli"
+    fi
     ok "Flywheel is installed on Ubuntu and available as flywheel"
 }
 

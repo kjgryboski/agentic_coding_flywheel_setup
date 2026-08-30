@@ -3391,8 +3391,10 @@ acfs_generated_install_stack_rch() {
                 local rch_cargo_toml_sha256="17112f2d581bf2916e515dda40fb048d983bb3154285a226fe6a09bef3e8ffc3"
                 local rch_toolchain="nightly-2026-06-06"
                 local rch_source_parent="$TARGET_HOME/.cache/acfs/source-builds"
+                local rch_build_cache_parent="$TARGET_HOME/.cache/acfs/source-build-cache"
                 local rch_source_dir=""
                 local rch_target=""
+                local rch_target_dir=""
                 local rch_binary=""
                 local rchd_binary=""
                 local rch_wkr_binary=""
@@ -3411,23 +3413,26 @@ acfs_generated_install_stack_rch() {
                     x86_64|amd64) rch_target="x86_64-unknown-linux-gnu" ;;
                     aarch64|arm64) rch_target="aarch64-unknown-linux-gnu" ;;
                 esac
+                if [[ -n "$rch_target" ]]; then
+                    rch_target_dir="$rch_build_cache_parent/rch-$rch_source_commit-$rch_toolchain-$rch_target"
+                fi
                 rch_git_bin="$(acfs_generated_system_binary_path git 2>/dev/null || true)"
                 rch_mkdir_bin="$(acfs_generated_system_binary_path mkdir 2>/dev/null || true)"
                 rch_mktemp_bin="$(acfs_generated_system_binary_path mktemp 2>/dev/null || true)"
                 rch_rm_bin="$(acfs_generated_system_binary_path rm 2>/dev/null || true)"
                 rch_sha256sum_bin="$(acfs_generated_system_binary_path sha256sum 2>/dev/null || true)"
 
-                if [[ -z "$rch_target" || -z "$rch_git_bin" || -z "$rch_mkdir_bin" || -z "$rch_mktemp_bin" || -z "$rch_rm_bin" || -z "$rch_sha256sum_bin" || ! -x "$rch_cargo_bin" || ! -x "$rch_rustup_bin" ]]; then
+                if [[ -z "$rch_target" || -z "$rch_target_dir" || -z "$rch_git_bin" || -z "$rch_mkdir_bin" || -z "$rch_mktemp_bin" || -z "$rch_rm_bin" || -z "$rch_sha256sum_bin" || ! -x "$rch_cargo_bin" || ! -x "$rch_rustup_bin" ]]; then
                     log_error "stack.rch: exact source build prerequisites are unavailable"
                     ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$rch_source_parent" ]]; then
+                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$rch_source_parent" || -L "$rch_build_cache_parent" || -L "$rch_target_dir" ]]; then
                     log_error "stack.rch: refusing source build through an invalid or symlinked target-home path"
                     ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                elif ! run_as_target "$rch_mkdir_bin" -p "$rch_source_parent"; then
-                    log_error "stack.rch: failed to prepare the confined source-build directory"
+                elif ! run_as_target "$rch_mkdir_bin" -p "$rch_source_parent" "$rch_target_dir"; then
+                    log_error "stack.rch: failed to prepare the confined source-build and cache directories"
                     ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                elif [[ ! -d "$rch_source_parent" || -L "$rch_source_parent" ]]; then
-                    log_error "stack.rch: source-build directory is not a confined real directory"
+                elif [[ ! -d "$rch_source_parent" || -L "$rch_source_parent" || ! -d "$rch_build_cache_parent" || -L "$rch_build_cache_parent" || ! -d "$rch_target_dir" || -L "$rch_target_dir" ]]; then
+                    log_error "stack.rch: source-build or exact cache directory is not a confined real directory"
                     ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
                 elif ! rch_source_dir="$(run_as_target "$rch_mktemp_bin" -d "$rch_source_parent/rch.XXXXXX" 2>/dev/null)"; then
                     log_error "stack.rch: failed to create the source-build staging directory"
@@ -3447,11 +3452,11 @@ acfs_generated_install_stack_rch() {
                     [[ "$(run_as_target "$rch_sha256sum_bin" "$rch_source_dir/src/Cargo.toml" | awk 'NR == 1 { print $1 }')" == "$rch_cargo_toml_sha256" ]]
                     [[ -z "$(run_as_target "$rch_git_bin" -C "$rch_source_dir/src" status --porcelain=v1 --untracked-files=all)" ]]
                     run_as_target "$rch_rustup_bin" toolchain install "$rch_toolchain" --profile minimal --no-self-update
-                    run_as_target env RCH_GIT_COMMIT="$rch_source_commit" CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$rch_cargo_bin" +"$rch_toolchain" build --locked --jobs 1 --target "$rch_target" --profile wrapper-release --package rch --bin rch --manifest-path "$rch_source_dir/src/Cargo.toml" --target-dir "$rch_source_dir/target"
-                    run_as_target env RCH_GIT_COMMIT="$rch_source_commit" CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$rch_cargo_bin" +"$rch_toolchain" build --locked --jobs 1 --target "$rch_target" --profile daemon-release --package rchd --package rch-wkr --manifest-path "$rch_source_dir/src/Cargo.toml" --target-dir "$rch_source_dir/target"
-                    rch_binary="$rch_source_dir/target/$rch_target/wrapper-release/rch"
-                    rchd_binary="$rch_source_dir/target/$rch_target/daemon-release/rchd"
-                    rch_wkr_binary="$rch_source_dir/target/$rch_target/daemon-release/rch-wkr"
+                    run_as_target env RCH_GIT_COMMIT="$rch_source_commit" CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$rch_cargo_bin" +"$rch_toolchain" build --locked --jobs 1 --target "$rch_target" --profile wrapper-release --package rch --bin rch --manifest-path "$rch_source_dir/src/Cargo.toml" --target-dir "$rch_target_dir"
+                    run_as_target env RCH_GIT_COMMIT="$rch_source_commit" CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$rch_cargo_bin" +"$rch_toolchain" build --locked --jobs 1 --target "$rch_target" --profile daemon-release --package rchd --package rch-wkr --manifest-path "$rch_source_dir/src/Cargo.toml" --target-dir "$rch_target_dir"
+                    rch_binary="$rch_target_dir/$rch_target/wrapper-release/rch"
+                    rchd_binary="$rch_target_dir/$rch_target/daemon-release/rchd"
+                    rch_wkr_binary="$rch_target_dir/$rch_target/daemon-release/rch-wkr"
                     [[ -f "$rch_binary" && -x "$rch_binary" && ! -L "$rch_binary" ]]
                     [[ -f "$rchd_binary" && -x "$rchd_binary" && ! -L "$rchd_binary" ]]
                     [[ -f "$rch_wkr_binary" && -x "$rch_wkr_binary" && ! -L "$rch_wkr_binary" ]]
@@ -4905,8 +4910,12 @@ acfs_generated_install_stack_eidetic_engine_cli() {
                 local ee_cargo_toml_sha256="2ae5549883ab45efca3f7eadd62130f24a4ff29f1c6216475dfa615646006598"
                 local ee_stack_lock_sha256="9b649eff8925fd22d980e7bbddd7ff479ff6318c14f141fe9a8343b7a4db2738"
                 local ee_checkout_sha256="a0f5041e4c13ba6faeb23df1e25ce3dc693c96dd9b2667d9d351e82e0dccde3c"
+                local ee_toolchain="nightly-2026-08-29"
                 local ee_source_parent="$TARGET_HOME/.cache/acfs/source-builds"
+                local ee_build_cache_parent="$TARGET_HOME/.cache/acfs/source-build-cache"
                 local ee_source_dir=""
+                local ee_cache_arch=""
+                local ee_target_dir=""
                 local ee_binary=""
                 local ee_version=""
                 local ee_git_bin=""
@@ -4915,24 +4924,32 @@ acfs_generated_install_stack_eidetic_engine_cli() {
                 local ee_rm_bin=""
                 local ee_sha256sum_bin=""
                 local ee_cargo_bin="$TARGET_HOME/.cargo/bin/cargo"
+                local ee_rustup_bin="$TARGET_HOME/.cargo/bin/rustup"
 
+                case "$(uname -m 2>/dev/null || true)" in
+                    x86_64|amd64) ee_cache_arch="x86_64" ;;
+                    aarch64|arm64) ee_cache_arch="aarch64" ;;
+                esac
+                if [[ -n "$ee_cache_arch" ]]; then
+                    ee_target_dir="$ee_build_cache_parent/ee-$ee_source_commit-$ee_toolchain-$ee_cache_arch"
+                fi
                 ee_git_bin="$(acfs_generated_system_binary_path git 2>/dev/null || true)"
                 ee_mkdir_bin="$(acfs_generated_system_binary_path mkdir 2>/dev/null || true)"
                 ee_mktemp_bin="$(acfs_generated_system_binary_path mktemp 2>/dev/null || true)"
                 ee_rm_bin="$(acfs_generated_system_binary_path rm 2>/dev/null || true)"
                 ee_sha256sum_bin="$(acfs_generated_system_binary_path sha256sum 2>/dev/null || true)"
 
-                if [[ -z "$ee_git_bin" || -z "$ee_mkdir_bin" || -z "$ee_mktemp_bin" || -z "$ee_rm_bin" || -z "$ee_sha256sum_bin" || ! -x "$ee_cargo_bin" ]]; then
+                if [[ -z "$ee_cache_arch" || -z "$ee_target_dir" || -z "$ee_git_bin" || -z "$ee_mkdir_bin" || -z "$ee_mktemp_bin" || -z "$ee_rm_bin" || -z "$ee_sha256sum_bin" || ! -x "$ee_cargo_bin" || ! -x "$ee_rustup_bin" ]]; then
                     log_error "stack.eidetic_engine_cli: exact source build prerequisites are unavailable"
                     ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$ee_source_parent" ]]; then
+                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$ee_source_parent" || -L "$ee_build_cache_parent" || -L "$ee_target_dir" ]]; then
                     log_error "stack.eidetic_engine_cli: refusing source build through an invalid or symlinked target-home path"
                     ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                elif ! run_as_target "$ee_mkdir_bin" -p "$ee_source_parent"; then
-                    log_error "stack.eidetic_engine_cli: failed to prepare the confined source-build directory"
+                elif ! run_as_target "$ee_mkdir_bin" -p "$ee_source_parent" "$ee_target_dir"; then
+                    log_error "stack.eidetic_engine_cli: failed to prepare the confined source-build and cache directories"
                     ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                elif [[ ! -d "$ee_source_parent" || -L "$ee_source_parent" ]]; then
-                    log_error "stack.eidetic_engine_cli: source-build directory is not a confined real directory"
+                elif [[ ! -d "$ee_source_parent" || -L "$ee_source_parent" || ! -d "$ee_build_cache_parent" || -L "$ee_build_cache_parent" || ! -d "$ee_target_dir" || -L "$ee_target_dir" ]]; then
+                    log_error "stack.eidetic_engine_cli: source-build or exact cache directory is not a confined real directory"
                     ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
                 elif ! ee_source_dir="$(run_as_target "$ee_mktemp_bin" -d "$ee_source_parent/eidetic-engine.XXXXXX" 2>/dev/null)"; then
                     log_error "stack.eidetic_engine_cli: failed to create the source-build staging directory"
@@ -4954,8 +4971,9 @@ acfs_generated_install_stack_eidetic_engine_cli() {
                     [[ "$(run_as_target "$ee_sha256sum_bin" "$ee_source_dir/eidetic_engine_cli/scripts/checkout-franken-stack.sh" | awk 'NR == 1 { print $1 }')" == "$ee_checkout_sha256" ]]
                     [[ -z "$(run_as_target "$ee_git_bin" -C "$ee_source_dir/eidetic_engine_cli" status --porcelain=v1 --untracked-files=all)" ]]
                     run_as_target env PATH="$TARGET_HOME/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" bash "$ee_source_dir/eidetic_engine_cli/scripts/checkout-franken-stack.sh" "$ee_source_dir"
-                    run_as_target env CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" build --jobs 1 --release --locked --bin ee --manifest-path "$ee_source_dir/eidetic_engine_cli/Cargo.toml" --target-dir "$ee_source_dir/target"
-                    ee_binary="$ee_source_dir/target/release/ee"
+                    run_as_target "$ee_rustup_bin" toolchain install "$ee_toolchain" --profile minimal --no-self-update
+                    run_as_target env CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" +"$ee_toolchain" build --jobs 1 --release --locked --bin ee --manifest-path "$ee_source_dir/eidetic_engine_cli/Cargo.toml" --target-dir "$ee_target_dir"
+                    ee_binary="$ee_target_dir/release/ee"
                     [[ -f "$ee_binary" && -x "$ee_binary" && ! -L "$ee_binary" ]]
                     ee_version="$(run_as_target "$ee_binary" --version 2>/dev/null)"
                     [[ "$ee_version" == "ee 0.14.2" ]]
@@ -5067,8 +5085,10 @@ acfs_generated_install_stack_franken_markdown() {
                 local fmd_cargo_toml_sha256="8cd3d68fcc88ede03ef1179d93fad1828d517b61469b3ef3c89aed237dcddabd"
                 local fmd_toolchain="nightly-2026-08-25"
                 local fmd_source_parent="$TARGET_HOME/.cache/acfs/source-builds"
+                local fmd_build_cache_parent="$TARGET_HOME/.cache/acfs/source-build-cache"
                 local fmd_source_dir=""
                 local fmd_target=""
+                local fmd_target_dir=""
                 local fmd_binary=""
                 local fmd_version=""
                 local fmd_git_bin=""
@@ -5083,23 +5103,26 @@ acfs_generated_install_stack_franken_markdown() {
                     x86_64|amd64) fmd_target="x86_64-unknown-linux-gnu" ;;
                     aarch64|arm64) fmd_target="aarch64-unknown-linux-gnu" ;;
                 esac
+                if [[ -n "$fmd_target" ]]; then
+                    fmd_target_dir="$fmd_build_cache_parent/fmd-$fmd_source_commit-$fmd_toolchain-$fmd_target"
+                fi
                 fmd_git_bin="$(acfs_generated_system_binary_path git 2>/dev/null || true)"
                 fmd_mkdir_bin="$(acfs_generated_system_binary_path mkdir 2>/dev/null || true)"
                 fmd_mktemp_bin="$(acfs_generated_system_binary_path mktemp 2>/dev/null || true)"
                 fmd_rm_bin="$(acfs_generated_system_binary_path rm 2>/dev/null || true)"
                 fmd_sha256sum_bin="$(acfs_generated_system_binary_path sha256sum 2>/dev/null || true)"
 
-                if [[ -z "$fmd_target" || -z "$fmd_git_bin" || -z "$fmd_mkdir_bin" || -z "$fmd_mktemp_bin" || -z "$fmd_rm_bin" || -z "$fmd_sha256sum_bin" || ! -x "$fmd_cargo_bin" || ! -x "$fmd_rustup_bin" ]]; then
+                if [[ -z "$fmd_target" || -z "$fmd_target_dir" || -z "$fmd_git_bin" || -z "$fmd_mkdir_bin" || -z "$fmd_mktemp_bin" || -z "$fmd_rm_bin" || -z "$fmd_sha256sum_bin" || ! -x "$fmd_cargo_bin" || ! -x "$fmd_rustup_bin" ]]; then
                     log_error "stack.franken_markdown: exact source build prerequisites are unavailable"
                     ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$fmd_source_parent" ]]; then
+                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$fmd_source_parent" || -L "$fmd_build_cache_parent" || -L "$fmd_target_dir" ]]; then
                     log_error "stack.franken_markdown: refusing source build through an invalid or symlinked target-home path"
                     ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                elif ! run_as_target "$fmd_mkdir_bin" -p "$fmd_source_parent"; then
-                    log_error "stack.franken_markdown: failed to prepare the confined source-build directory"
+                elif ! run_as_target "$fmd_mkdir_bin" -p "$fmd_source_parent" "$fmd_target_dir"; then
+                    log_error "stack.franken_markdown: failed to prepare the confined source-build and cache directories"
                     ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                elif [[ ! -d "$fmd_source_parent" || -L "$fmd_source_parent" ]]; then
-                    log_error "stack.franken_markdown: source-build directory is not a confined real directory"
+                elif [[ ! -d "$fmd_source_parent" || -L "$fmd_source_parent" || ! -d "$fmd_build_cache_parent" || -L "$fmd_build_cache_parent" || ! -d "$fmd_target_dir" || -L "$fmd_target_dir" ]]; then
+                    log_error "stack.franken_markdown: source-build or exact cache directory is not a confined real directory"
                     ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
                 elif ! fmd_source_dir="$(run_as_target "$fmd_mktemp_bin" -d "$fmd_source_parent/fmd.XXXXXX" 2>/dev/null)"; then
                     log_error "stack.franken_markdown: failed to create the source-build staging directory"
@@ -5119,8 +5142,8 @@ acfs_generated_install_stack_franken_markdown() {
                     [[ "$(run_as_target "$fmd_sha256sum_bin" "$fmd_source_dir/src/Cargo.toml" | awk 'NR == 1 { print $1 }')" == "$fmd_cargo_toml_sha256" ]]
                     [[ -z "$(run_as_target "$fmd_git_bin" -C "$fmd_source_dir/src" status --porcelain=v1 --untracked-files=all)" ]]
                     run_as_target "$fmd_rustup_bin" toolchain install "$fmd_toolchain" --profile minimal --no-self-update
-                    run_as_target env CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$fmd_cargo_bin" +"$fmd_toolchain" build --locked --jobs 1 --target "$fmd_target" --release --package franken_markdown --bin fmd --manifest-path "$fmd_source_dir/src/Cargo.toml" --target-dir "$fmd_source_dir/target"
-                    fmd_binary="$fmd_source_dir/target/$fmd_target/release/fmd"
+                    run_as_target env CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$fmd_cargo_bin" +"$fmd_toolchain" build --locked --jobs 1 --target "$fmd_target" --release --package franken_markdown --bin fmd --manifest-path "$fmd_source_dir/src/Cargo.toml" --target-dir "$fmd_target_dir"
+                    fmd_binary="$fmd_target_dir/$fmd_target/release/fmd"
                     [[ -f "$fmd_binary" && -x "$fmd_binary" && ! -L "$fmd_binary" ]]
                     fmd_version="$(run_as_target "$fmd_binary" --version 2>/dev/null)"
                     [[ "$fmd_version" == "fmd 0.4.2" ]]

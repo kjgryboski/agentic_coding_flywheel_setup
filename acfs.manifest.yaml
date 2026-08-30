@@ -435,13 +435,15 @@ modules:
       - base.system
     installed_check:
       run_as: current
-      command: "command -v rg && command -v tmux && command -v fzf"
+      command: "command -v rg && command -v tmux && command -v fzf && command -v direnv && command -v jq && command -v gh && command -v git-lfs && command -v lsof && command -v dig && command -v nc && command -v strace && command -v rsync"
     install:
       - apt-get -o DPkg::Lock::Timeout=120 install -y ripgrep tmux fzf direnv jq gh git-lfs lsof dnsutils netcat-openbsd strace rsync
       - apt-get -o DPkg::Lock::Timeout=120 install -y lsd || true
       - apt-get -o DPkg::Lock::Timeout=120 install -y eza || true
       - apt-get -o DPkg::Lock::Timeout=120 install -y bat || apt-get -o DPkg::Lock::Timeout=120 install -y batcat || true
       - apt-get -o DPkg::Lock::Timeout=120 install -y fd-find || true
+      - if ! command -v bat >/dev/null 2>&1 && command -v batcat >/dev/null 2>&1; then ln -sf "$(command -v batcat)" /usr/local/bin/bat; fi
+      - if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then ln -sf "$(command -v fdfind)" /usr/local/bin/fd; fi
       - apt-get -o DPkg::Lock::Timeout=120 install -y btop || true
       - apt-get -o DPkg::Lock::Timeout=120 install -y dust || true
       - apt-get -o DPkg::Lock::Timeout=120 install -y neovim || true
@@ -458,6 +460,8 @@ modules:
       - command -v dig
       - command -v nc
       - command -v lsd || command -v eza || true
+      - command -v bat || command -v batcat || true
+      - command -v fd || command -v fdfind || true
 
   - id: tools.lazygit
     description: Lazygit (apt or binary fallback)
@@ -899,7 +903,7 @@ modules:
     install:
       - |
         claude_candidate=""
-        for candidate in "$HOME/.claude/bin/claude" "$HOME/.claude/local/bin/claude" "$HOME/.bun/bin/claude"; do
+        for candidate in "$HOME/.local/bin/claude" "$HOME/.claude/bin/claude" "$HOME/.claude/local/bin/claude" "$HOME/.bun/bin/claude"; do
           if [[ -x "$candidate" ]]; then
             claude_candidate="$candidate"
             break
@@ -912,7 +916,10 @@ modules:
           echo "Claude Code: installed but no runnable claude binary found" >&2
           exit 1
         fi
-        acfs_link_primary_bin_command "$claude_candidate" "claude"
+        claude_target="${ACFS_BIN_DIR:-$HOME/.local/bin}/claude"
+        if [[ "$claude_candidate" != "$claude_target" ]]; then
+          acfs_link_primary_bin_command "$claude_candidate" "claude"
+        fi
     verify:
       - |
         target_bin="${ACFS_BIN_DIR:-$HOME/.local/bin}"

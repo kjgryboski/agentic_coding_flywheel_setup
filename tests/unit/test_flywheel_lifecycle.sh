@@ -114,15 +114,18 @@ cp "$REPO_ROOT/config/flywheel-partial-safe-allowlist.json" \
     "$QUALIFICATION_ROOT/config/flywheel-partial-safe-allowlist.json"
 cp "$REPO_ROOT/config/flywheel-lima.yaml" \
     "$QUALIFICATION_ROOT/config/flywheel-lima.yaml"
+cp "$REPO_ROOT/flywheel" "$QUALIFICATION_ROOT/flywheel"
 cp "$REPO_ROOT/scripts/flywheel-repository-control.py" \
     "$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py"
 git -C "$QUALIFICATION_ROOT" add \
-    acfs.manifest.yaml VERSION AGENTS.md .github/workflows/test.yml \
+    acfs.manifest.yaml VERSION AGENTS.md flywheel .github/workflows/test.yml \
     config/flywheel-partial-safe-allowlist.json config/flywheel-lima.yaml \
     scripts/flywheel-repository-control.py
 git -C "$QUALIFICATION_ROOT" -c user.name=Flywheel -c user.email=flywheel.invalid@example.test \
     commit -qm initial
 printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$TEST_ROOT/os-release"
+printf 'MemTotal: 10485760 kB\nSwapTotal: 8388608 kB\n' >"$TEST_ROOT/meminfo"
+git -C "$QUALIFICATION_ROOT" bundle create "$TEST_ROOT/qualification-source.bundle" HEAD
 cat >"$TEST_ROOT/uname" <<'SH'
 #!/usr/bin/env bash
 [[ "${1:-}" == "-m" ]] && printf 'aarch64\n' || exec /usr/bin/uname "$@"
@@ -140,7 +143,9 @@ chmod 0755 "$TEST_ROOT/uname" "$TEST_ROOT/df" "$TEST_ROOT/systemd-detect-virt"
 qualification_json="$(
     PATH="$TEST_ROOT:$PATH" \
     FLYWHEEL_SOURCE_ROOT="$QUALIFICATION_ROOT" \
+    FLYWHEEL_SOURCE_BUNDLE="$TEST_ROOT/qualification-source.bundle" \
     FLYWHEEL_OS_RELEASE_FILE="$TEST_ROOT/os-release" \
+    FLYWHEEL_MEMINFO_FILE="$TEST_ROOT/meminfo" \
     FLYWHEEL_BASH_MAJOR=5 \
     FLYWHEEL_BASH_VERSION=5.2.0 \
     "$REPO_ROOT/scripts/flywheel-qualification-host.sh" --json
@@ -149,10 +154,15 @@ python3 -c '
 import json,sys
 value=json.loads(sys.argv[1])
 assert value["status"] == "pass"
-assert value["summary"] == {"fail":0,"pass":6}
+assert value["summary"] == {"fail":0,"pass":9}
 assert value["contract"]["host_identity"] == "any-compliant-host"
 assert value["contract"]["architectures"] == ["aarch64","x86_64"]
 assert value["contract"]["minimum_disk_gib"] == 20
+assert value["contract"]["minimum_memory_gib"] == 8
+assert value["contract"]["minimum_swap_gib"] == 8
+assert value["source"]["clean"] is True
+assert value["bundle"]["verified"] is True
+assert len(value["receipt_sha256"]) == 64
 ' "$qualification_json"
 
 export FLYWHEEL_SOURCE_REPO="$QUALIFICATION_ROOT"
@@ -165,6 +175,11 @@ HOME="$TEST_ROOT/home" "$REPO_ROOT/flywheel" mac install --quiet
 [[ ! -L "$FLYWHEEL_STATE_HOME/source-root" ]]
 [[ ! -L "$FLYWHEEL_STATE_HOME/installation.json" ]]
 [[ "$(<"$TEST_ROOT/symlink-target")" == "do-not-overwrite" ]]
+cmp -s "$QUALIFICATION_ROOT/flywheel" "$TEST_ROOT/home/.local/bin/flywheel"
+# The installed entrypoint must be able to converge again. Historically it
+# tried to install itself onto itself and failed after the guest had succeeded.
+HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" mac install --quiet
+cmp -s "$QUALIFICATION_ROOT/flywheel" "$TEST_ROOT/home/.local/bin/flywheel"
 python3 - "$FLYWHEEL_STATE_HOME/installation.json" "$QUALIFICATION_ROOT" <<'PY'
 import json
 import subprocess

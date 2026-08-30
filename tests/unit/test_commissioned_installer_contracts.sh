@@ -412,6 +412,8 @@ check(
     && rchGenerated.includes('local rch_cargo_lock_sha256="c115964866335f4194dd83350f0a800f5af507a99e23943eef31812d79536e4a"')
     && rchGenerated.includes('--profile wrapper-release --package rch --bin rch')
     && rchGenerated.includes('--profile daemon-release --package rchd --package rch-wkr')
+    && rchGenerated.includes('rch_target_dir="$rch_build_cache_parent/rch-$rch_source_commit-$rch_toolchain-$rch_target"')
+    && rchGenerated.includes('--target-dir "$rch_target_dir"')
     && rchGenerated.includes('CARGO_BUILD_JOBS=1 RUSTFLAGS=')
     && rchGenerated.includes('rch 1.0.60 (commit 0a982fdee2ca)')
     && rchGenerated.includes('rchd 1.0.60 (commit 0a982fdee2ca)')

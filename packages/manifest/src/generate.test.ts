@@ -620,6 +620,11 @@ describe('Generated verified installer args', () => {
     expect(preludeIndex).toBeGreaterThanOrEqual(0);
     expect(preludeIndex).toBeGreaterThan(generatedPreludeIndex);
     expect(linkIndex).toBeGreaterThan(preludeIndex);
+    expect(agentsContent).toContain(
+      'for candidate in "$HOME/.local/bin/claude" "$HOME/.claude/bin/claude" "$HOME/.claude/local/bin/claude" "$HOME/.bun/bin/claude"; do'
+    );
+    expect(agentsContent).toContain('claude_target="${ACFS_BIN_DIR:-$HOME/.local/bin}/claude"');
+    expect(agentsContent).toContain('if [[ "$claude_candidate" != "$claude_target" ]]; then');
     expect(installIndex).toBeGreaterThan(preludeIndex);
     expect(agentsContent).toContain('acfs_generated_system_binary_path() {');
     expect(agentsContent).toContain('acfs_child_primary_bin_dir() {');
@@ -635,6 +640,21 @@ describe('Generated verified installer args', () => {
     expect(agentsContent).not.toContain('acfs_child_run_root_bin_command install -m 0755');
     expect(agentsContent).toContain('acfs_install_executable_into_primary_bin() {');
     expect(agentsContent).toContain('acfs_link_primary_bin_command() {');
+  });
+
+  test('cli.modern recovery predicate and Ubuntu command adoption cover the required contract', () => {
+    const partialPath = resolve(GENERATED_DIR, 'install_w2_partial_safe.sh');
+    const indexPath = resolve(GENERATED_DIR, 'manifest_index.sh');
+    expect(existsSync(partialPath)).toBe(true);
+    expect(existsSync(indexPath)).toBe(true);
+    const partialContent = readFileSync(partialPath, 'utf-8');
+    const indexContent = readFileSync(indexPath, 'utf-8');
+
+    expect(indexContent).toContain(
+      'command -v rg && command -v tmux && command -v fzf && command -v direnv && command -v jq && command -v gh && command -v git-lfs && command -v lsof && command -v dig && command -v nc && command -v strace && command -v rsync'
+    );
+    expect(partialContent).toContain('ln -sf "$(command -v batcat)" /usr/local/bin/bat');
+    expect(partialContent).toContain('ln -sf "$(command -v fdfind)" /usr/local/bin/fd');
   });
 
   test('stack.meta_skill uses an exact locked source build on Linux', () => {
@@ -677,7 +697,7 @@ describe('Generated verified installer args', () => {
     expect(stackContent).toContain('ee_stack_lock_sha256="9b649eff8925fd22d980e7bbddd7ff479ff6318c14f141fe9a8343b7a4db2738"');
     expect(stackContent).toContain('scripts/checkout-franken-stack.sh" "$ee_source_dir"');
     expect(stackContent).toContain(
-      'CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" build --jobs 1 --release --locked --bin ee'
+      'CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" +"$ee_toolchain" build --jobs 1 --release --locked --bin ee'
     );
     expect(stackContent).toContain('[[ "$ee_version" == "ee 0.14.2" ]]');
     expect(stackContent).toContain('acfs_install_executable_into_primary_bin "$ee_binary" ee');
@@ -757,13 +777,26 @@ describe('Generated verified installer args', () => {
       'CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$rch_cargo_bin" +"$rch_toolchain" build --locked --jobs 1'
     );
     expect(stackContent).toContain(
-      'run_as_target env CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" build --jobs 1 --release --locked --bin ee'
+      'rch_target_dir="$rch_build_cache_parent/rch-$rch_source_commit-$rch_toolchain-$rch_target"'
+    );
+    expect(stackContent).toContain('--target-dir "$rch_target_dir"');
+    expect(stackContent).toContain(
+      'local ee_toolchain="nightly-2026-08-29"'
+    );
+    expect(stackContent).toContain(
+      'ee_target_dir="$ee_build_cache_parent/ee-$ee_source_commit-$ee_toolchain-$ee_cache_arch"'
+    );
+    expect(stackContent).toContain(
+      'run_as_target env CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" +"$ee_toolchain" build --jobs 1 --release --locked --bin ee'
     );
     expect(stackContent).toContain(
       'local fmd_source_commit="5637bad86e3c0deacab6411a734715015b143a12"'
     );
     expect(stackContent).toContain(
       'CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$fmd_cargo_bin" +"$fmd_toolchain" build --locked --jobs 1'
+    );
+    expect(stackContent).toContain(
+      'fmd_target_dir="$fmd_build_cache_parent/fmd-$fmd_source_commit-$fmd_toolchain-$fmd_target"'
     );
   });
 

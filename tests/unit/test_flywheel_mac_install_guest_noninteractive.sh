@@ -13,6 +13,18 @@ launch_block="$({
 [[ "$launch_block" == *'"${install_args[@]}" </dev/null >"$INSTALL_LOG" 2>&1'* ]]
 [[ "$launch_block" == *$'install_status=$?'* ]]
 
+python3 - "$GUEST_INSTALLER" <<'PY'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+swap = text.index('bash -p "$SOURCE_ROOT/scripts/flywheel-ensure-swap.sh"')
+qualification = text.index('bash -p "$SOURCE_ROOT/scripts/flywheel-qualification-host.sh" --json', swap)
+fast_path = text.index("if exit_if_existing_state_is_healthy; then", qualification)
+packages = text.index("apt-get -o Acquire::Retries=3 update", fast_path)
+assert swap < qualification < fast_path < packages
+PY
+
 # On the Ubuntu guest platform, exercise the launch primitive from a parent
 # that owns a PTY. The child must neither see stdin as a TTY nor be able to
 # reopen the parent's controlling terminal, and setsid --wait must preserve its

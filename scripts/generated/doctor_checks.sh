@@ -374,6 +374,8 @@ declare -a MANIFEST_CHECKS=(
     "cli.modern.9	Modern CLI tools referenced by the zshrc intent	command -v dig	required	root"
     "cli.modern.10	Modern CLI tools referenced by the zshrc intent	command -v nc	required	root"
     "cli.modern.11	Modern CLI tools referenced by the zshrc intent	command -v lsd || command -v eza	optional	root"
+    "cli.modern.12	Modern CLI tools referenced by the zshrc intent	command -v bat || command -v batcat	optional	root"
+    "cli.modern.13	Modern CLI tools referenced by the zshrc intent	command -v fd || command -v fdfind	optional	root"
     "tools.lazygit	Lazygit (apt or binary fallback)	lazygit --version	required	root"
     "tools.lazydocker	Lazydocker (binary install)	lazydocker --version	required	root"
     "network.tailscale.1	Zero-config mesh VPN for secure remote VPS access	tailscale version	required	root"

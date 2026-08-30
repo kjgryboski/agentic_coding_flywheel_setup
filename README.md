@@ -50,8 +50,17 @@ The installer is **idempotent**—if interrupted, simply re-run it. It will auto
 The supported Mac path runs the Flywheel inside an isolated Ubuntu 24.04 VM;
 native macOS is the control host, not the installation target. Any Linux host
 can qualify when it satisfies the published contract (Ubuntu 24.04, `aarch64`
-or `x86_64`, Bash 4+, at least 20 GiB free, VM isolation, and a clean exact
-source checkout). No specifically named machine is required.
+or `x86_64`, Bash 4+, at least 20 GiB free, at least 8 GiB memory and 8 GiB
+swap, isolation, a clean exact source checkout, and the verified Git bundle
+that contains its HEAD). No specifically named machine is required.
+
+Run `scripts/flywheel-qualification-host.sh --json --bundle PATH` on any
+candidate host. The result is an `agent-flywheel.qualification-host/v1`
+receipt containing observed host resources, clean-state evidence, exact source
+HEAD/tree and bundle SHA-256 identities, and a content-binding
+`receipt_sha256`. The standard Mac lifecycle discovers its staged bundle
+automatically; independent hosts pass it explicitly with `--bundle` or
+`FLYWHEEL_SOURCE_BUNDLE`.
 
 ```bash
 flywheel mac install
