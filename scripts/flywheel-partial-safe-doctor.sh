@@ -8,6 +8,10 @@ ALLOWLIST="${ACFS_PARTIAL_SAFE_ALLOWLIST_FILE:-$SOURCE_ROOT/config/flywheel-part
 CLEARANCE="${ACFS_LICENSE_CLEARANCE_FILE:-}"
 TARGET_USER="${TARGET_USER:-ubuntu}"
 TARGET_HOME="${TARGET_HOME:-/home/$TARGET_USER}"
+SYSTEM_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MODULE_PATH="$TARGET_HOME/.local/bin:$TARGET_HOME/.bun/bin:$TARGET_HOME/.cargo/bin:/usr/local/go/bin:$SYSTEM_PATH"
+PATH="$SYSTEM_PATH"
+export PATH
 FORMAT="text"
 LICENSE_CLEARED=false
 
@@ -40,6 +44,47 @@ else
 fi
 export TARGET_USER TARGET_HOME
 
+module_command_path() {
+    PATH="$MODULE_PATH" command -v "$1" 2>/dev/null
+}
+
+doctor_safe_git() {
+    /usr/bin/env -i \
+        HOME="$TARGET_HOME" \
+        PATH=/usr/bin:/bin \
+        LANG=C \
+        LC_ALL=C \
+        GIT_ATTR_NOSYSTEM=1 \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_EXTERNAL_DIFF= \
+        GIT_LITERAL_PATHSPECS=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_TERMINAL_PROMPT=0 \
+        /usr/bin/git \
+            -c "safe.directory=$SOURCE_ROOT" \
+            -c core.fsmonitor=false \
+            -c core.untrackedCache=false \
+            -c core.hooksPath=/dev/null \
+            -c diff.external= \
+            -c interactive.diffFilter= \
+            -C "$SOURCE_ROOT" "$@"
+}
+
+SOURCE_HEAD="$(doctor_safe_git rev-parse --verify HEAD 2>/dev/null || true)"
+SOURCE_TREE="$(doctor_safe_git rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+if [[ "$LICENSE_CLEARED" == "true" ]]; then
+    DOCTOR_AUTHORITY_KIND=license_clearance
+    DOCTOR_AUTHORITY_PATH="$CLEARANCE"
+else
+    DOCTOR_AUTHORITY_KIND=partial_safe_allowlist
+    DOCTOR_AUTHORITY_PATH="$ALLOWLIST"
+fi
+DOCTOR_AUTHORITY_SHA256="$(/usr/bin/sha256sum "$DOCTOR_AUTHORITY_PATH" 2>/dev/null \
+    | /usr/bin/awk 'NR == 1 { print $1 }')"
+
 checks=()
 failures=0
 record() {
@@ -51,11 +96,11 @@ record() {
 }
 
 if [[ "$LICENSE_CLEARED" == "true" ]] && acfs_license_clearance_verify; then
-    record license_clearance pass "$(sha256sum "$CLEARANCE" | awk '{print $1}')"
+    record license_clearance pass "$DOCTOR_AUTHORITY_SHA256"
 elif [[ "$LICENSE_CLEARED" == "true" ]]; then
     record license_clearance fail "${ACFS_LICENSE_CLEARANCE_POLICY_REASON:-clearance rejected}"
 elif acfs_w2_partial_safe_verify_allowlist; then
-    record allowlist pass "$(sha256sum "$ALLOWLIST" | awk '{print $1}')"
+    record allowlist pass "$DOCTOR_AUTHORITY_SHA256"
 else
     record allowlist fail "${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-allowlist rejected}"
 fi
@@ -128,7 +173,7 @@ fi
 
 missing=()
 for command_name in rg fzf direnv gh git-lfs; do
-    command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
+    module_command_path "$command_name" >/dev/null || missing+=("$command_name")
 done
 if ((${#missing[@]} == 0)); then
     record cli.modern pass "rg fzf direnv gh git-lfs"
@@ -139,8 +184,8 @@ fi
 for module_command in "lang.bun:bun" "lang.uv:uv" "lang.rust:rustc" "lang.rust:cargo" "lang.go:go"; do
     module_id="${module_command%%:*}"
     command_name="${module_command#*:}"
-    if command -v "$command_name" >/dev/null 2>&1; then
-        record "$module_id/$command_name" pass "$(command -v "$command_name")"
+    if command_path="$(module_command_path "$command_name")"; then
+        record "$module_id/$command_name" pass "$command_path"
     else
         record "$module_id/$command_name" fail "$command_name missing"
     fi
@@ -197,7 +242,7 @@ if [[ "$LICENSE_CLEARED" == "true" ]]; then
         "stack.franken_markdown:fmd" "stack.pi_agent_rust:pi"; do
         module_id="${module_command%%:*}"
         command_name="${module_command#*:}"
-        command -v "$command_name" >/dev/null 2>&1 || missing+=("$module_id:$command_name")
+        module_command_path "$command_name" >/dev/null || missing+=("$module_id:$command_name")
     done
     if ((${#missing[@]} == 0)); then
         record expanded_modules pass "28/28 dependency and licensed module commands available"
@@ -232,9 +277,10 @@ else
 fi
 
 if [[ "$FORMAT" == "json" ]]; then
-    printf '%s\n' "${checks[@]}" | python3 -c '
-import json, sys
+    printf '%s\n' "${checks[@]}" | /usr/bin/python3 -I -c '
+import hashlib, json, sys
 license_cleared=sys.argv[1] == "true"
+source_head, source_tree, authority_kind, authority_sha256 = sys.argv[2:]
 rows=[]
 for line in sys.stdin:
     line=line.rstrip("\n")
@@ -243,15 +289,20 @@ for line in sys.stdin:
     identifier,status,detail=line.split("\t",2)
     rows.append({"id":identifier,"status":status,"detail":detail})
 failures=sum(row["status"] != "pass" for row in rows)
-print(json.dumps({
+receipt={
     "schema":"agent-flywheel.license-cleared-doctor/v1" if license_cleared else "agent-flywheel.partial-safe-doctor/v1",
     "claim":"LICENSE_CLEARED_PARTIAL" if license_cleared else "PARTIAL_SAFE",
     "fully_commissioned":False,
     "status":"pass" if failures == 0 else "fail",
+    "source":{"head":source_head or None,"tree":source_tree or None},
+    "authority":{"kind":authority_kind,"sha256":authority_sha256 or None},
     "checks":rows,
     "summary":{"pass":len(rows)-failures,"warn":0,"fail":failures},
-},sort_keys=True,separators=(",",":")))
-' "$LICENSE_CLEARED"
+}
+canonical=json.dumps(receipt,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n"
+receipt["receipt_sha256"]=hashlib.sha256(canonical.encode()).hexdigest()
+print(json.dumps(receipt,sort_keys=True,separators=(",",":"),ensure_ascii=False))
+' "$LICENSE_CLEARED" "$SOURCE_HEAD" "$SOURCE_TREE" "$DOCTOR_AUTHORITY_KIND" "$DOCTOR_AUTHORITY_SHA256"
 else
     for item in "${checks[@]}"; do
         IFS=$'\t' read -r id status detail <<<"$item"

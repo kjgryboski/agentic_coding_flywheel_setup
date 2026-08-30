@@ -117,12 +117,20 @@ helper_source="$(<"$SWAP_HELPER")"
 [[ "$helper_source" == *'if [[ "$(uname -s)" != "Linux" ]]'* ]]
 [[ "$helper_source" == *'if [[ "$os_id" != "ubuntu" ]]'* ]]
 
-call_pattern='bash -p "$SOURCE_ROOT/scripts/flywheel-ensure-swap.sh"'
+call_pattern='/bin/bash -p "$SOURCE_ROOT/scripts/flywheel-ensure-swap.sh"'
 [[ "$(grep -Fxc "$call_pattern" "$GUEST_INSTALLER")" -eq 1 ]]
 call_line="$(grep -Fn "$call_pattern" "$GUEST_INSTALLER" | cut -d: -f1)"
 apt_line="$(grep -n '^apt-get -o DPkg::Lock::Timeout=120 install -y' "$GUEST_INSTALLER" | cut -d: -f1)"
-launch_line="$(grep -n '^/usr/bin/setsid --wait env' "$GUEST_INSTALLER" | cut -d: -f1)"
+launch_line="$(grep -n '^/usr/bin/setsid --wait /usr/bin/env -i' "$GUEST_INSTALLER" | cut -d: -f1)"
 ((call_line > apt_line && call_line < launch_line))
+if grep -F -- 'git -C "$SOURCE_ROOT"' "$GUEST_INSTALLER" >/dev/null; then
+    printf 'guest installer retained ambient Git execution\n' >&2
+    exit 1
+fi
+grep -F -- 'guest_safe_git() {' "$GUEST_INSTALLER" >/dev/null
+grep -F -- '/usr/bin/git ' "$GUEST_INSTALLER" >/dev/null
+grep -F -- 'SOURCE_HEAD="$(guest_safe_git rev-parse --verify HEAD' "$GUEST_INSTALLER" >/dev/null
+grep -F -- 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' "$GUEST_INSTALLER" >/dev/null
 
 doctor_source="$(<"$STRICT_DOCTOR")"
 [[ "$doctor_source" == *'swap_metadata="$(sudo -n stat -Lc '\''%U:%G:%a:%s:%h'\'' "$swap_file"'* ]]
@@ -132,5 +140,8 @@ doctor_source="$(<"$STRICT_DOCTOR")"
 [[ "$doctor_source" == *'"$swap_sysctl_content" == "vm.swappiness = 10"'* ]]
 [[ "$doctor_source" == *'NR > 1 && $1 == expected { found = 1 }'* ]]
 [[ "$doctor_source" == *'record host.swap_contract pass "8 GiB persistent swap active; vm.swappiness=10"'* ]]
+[[ "$doctor_source" == *'/usr/bin/python3 -I -c'* ]]
+[[ "$doctor_source" == *'MODULE_PATH="$TARGET_HOME/.local/bin:'* ]]
+[[ "$doctor_source" == *'PATH="$SYSTEM_PATH"'* ]]
 
 printf 'flywheel swap convergence contract: PASS\n'

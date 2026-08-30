@@ -2,6 +2,8 @@
 set -euo pipefail
 shopt -s lastpipe 2>/dev/null || true
 umask 022
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 if (($# != 1)); then
     printf 'Usage: %s ABSOLUTE_SOURCE_ROOT\n' "${0##*/}" >&2
@@ -31,8 +33,43 @@ W3_TRANSITION_ACTIVE=false
 W3_TRANSITION_STATE=""
 W3_TRANSITION_SHA256=""
 
-if [[ "$SOURCE_ROOT" != /opt/agent-flywheel-acfs-* || ! -d "$SOURCE_ROOT/.git" ]]; then
+if [[ ! "$SOURCE_ROOT" =~ ^/opt/agent-flywheel-acfs-[0-9a-f]{40}$ \
+    || ! -d "$SOURCE_ROOT" || -L "$SOURCE_ROOT" \
+    || ! -d "$SOURCE_ROOT/.git" || -L "$SOURCE_ROOT/.git" \
+    || "$(cd "$SOURCE_ROOT" && pwd -P)" != "$SOURCE_ROOT" ]]; then
     printf 'Refusing untrusted Flywheel source root: %s\n' "$SOURCE_ROOT" >&2
+    exit 2
+fi
+EXPECTED_SOURCE_HEAD="${SOURCE_ROOT##*/agent-flywheel-acfs-}"
+guest_safe_git() {
+    /usr/bin/env -i \
+        HOME=/root \
+        PATH=/usr/bin:/bin \
+        LANG=C \
+        LC_ALL=C \
+        GIT_ATTR_NOSYSTEM=1 \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_EXTERNAL_DIFF= \
+        GIT_LITERAL_PATHSPECS=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_TERMINAL_PROMPT=0 \
+        /usr/bin/git \
+            -c "safe.directory=$SOURCE_ROOT" \
+            -c core.fsmonitor=false \
+            -c core.untrackedCache=false \
+            -c core.hooksPath=/dev/null \
+            -c diff.external= \
+            -c interactive.diffFilter= \
+            -C "$SOURCE_ROOT" "$@"
+}
+SOURCE_HEAD="$(guest_safe_git rev-parse --verify HEAD 2>/dev/null || true)"
+SOURCE_TREE="$(guest_safe_git rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+if [[ "$SOURCE_HEAD" != "$EXPECTED_SOURCE_HEAD" \
+    || ! "$SOURCE_TREE" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'Refusing guest source whose Git identity is not bound to its content-addressed path.\n' >&2
     exit 2
 fi
 if [[ ! -f "$SOURCE_ALLOWLIST" || -L "$SOURCE_ALLOWLIST" ]]; then
@@ -56,25 +93,25 @@ doctor() {
     if [[ "$LICENSE_CLEARED" == "true" ]]; then
         authority_env=(ACFS_LICENSE_CLEARANCE_FILE="$DOCTOR_CLEARANCE")
     fi
-    sudo -u ubuntu env \
+    sudo -u ubuntu /usr/bin/env -i \
         HOME="$TARGET_HOME" \
-        PATH="$TARGET_HOME/.local/bin:$TARGET_HOME/.bun/bin:$TARGET_HOME/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         TARGET_USER="$TARGET_USER" \
         TARGET_HOME="$TARGET_HOME" \
         FLYWHEEL_SOURCE_ROOT="$SOURCE_ROOT" \
         "${authority_env[@]}" \
-        bash -p "$SOURCE_ROOT/scripts/flywheel-partial-safe-doctor.sh" --json
+        /bin/bash -p "$SOURCE_ROOT/scripts/flywheel-partial-safe-doctor.sh" --json
 }
 
 doctor_partial_safe() {
-    sudo -u ubuntu env \
+    sudo -u ubuntu /usr/bin/env -i \
         HOME="$TARGET_HOME" \
-        PATH="$TARGET_HOME/.local/bin:$TARGET_HOME/.bun/bin:$TARGET_HOME/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         TARGET_USER="$TARGET_USER" \
         TARGET_HOME="$TARGET_HOME" \
         FLYWHEEL_SOURCE_ROOT="$SOURCE_ROOT" \
         ACFS_PARTIAL_SAFE_ALLOWLIST_FILE="$DOCTOR_ALLOWLIST" \
-        bash -p "$SOURCE_ROOT/scripts/flywheel-partial-safe-doctor.sh" --json
+        /bin/bash -p "$SOURCE_ROOT/scripts/flywheel-partial-safe-doctor.sh" --json
 }
 
 exit_if_existing_state_is_healthy() {
@@ -155,7 +192,7 @@ finalize_w3_transition() {
     jq -cn \
         --arg prior_state "$W3_TRANSITION_STATE" \
         --arg prior_state_sha256 "$W3_TRANSITION_SHA256" \
-        --arg source_head "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" \
+        --arg source_head "$SOURCE_HEAD" \
         --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         '{schema:"agent-flywheel.convergence/v1",status:"pass",from:"PARTIAL_SAFE",to:"LICENSE_CLEARED_PARTIAL",prior_state:{path:$prior_state,sha256:$prior_state_sha256},source:{head:$source_head},completed_at:$completed_at}' \
         >"$candidate"
@@ -167,11 +204,12 @@ finalize_w3_transition() {
 
 trap restore_w3_transition EXIT
 
-bash -p "$SOURCE_ROOT/scripts/flywheel-ensure-swap.sh"
-sudo -u ubuntu env \
+/bin/bash -p "$SOURCE_ROOT/scripts/flywheel-ensure-swap.sh"
+sudo -u ubuntu /usr/bin/env -i \
     HOME="$TARGET_HOME" \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     FLYWHEEL_SOURCE_ROOT="$SOURCE_ROOT" \
-    bash -p "$SOURCE_ROOT/scripts/flywheel-qualification-host.sh" --json >/dev/null
+    /bin/bash -p "$SOURCE_ROOT/scripts/flywheel-qualification-host.sh" --json >/dev/null
 if exit_if_existing_state_is_healthy; then
     exit 0
 fi
@@ -199,7 +237,7 @@ fi
 
 install -o root -g root -m 0600 /dev/null "$INSTALL_LOG"
 
-head="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
+head="$SOURCE_HEAD"
 install_authority=(ACFS_PARTIAL_SAFE_ALLOWLIST_FILE="$INSTALL_ALLOWLIST")
 install_modules=(
     users.ubuntu base.filesystem cli.modern lang.bun lang.uv lang.rust lang.go
@@ -223,11 +261,15 @@ done
 set +e
 # limactl may give this lifecycle process a PTY. Start the installer in a new
 # session with closed stdin so --yes cannot discover or reopen that terminal.
-/usr/bin/setsid --wait env \
+/usr/bin/setsid --wait /usr/bin/env -i \
+    HOME=/root \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
     "${install_authority[@]}" \
     TARGET_USER="$TARGET_USER" \
     TARGET_HOME="$TARGET_HOME" \
-    bash -p "$SOURCE_ROOT/install.sh" \
+    /bin/bash -p "$SOURCE_ROOT/install.sh" \
         --yes \
         --mode vibe \
         --ref "$head" \

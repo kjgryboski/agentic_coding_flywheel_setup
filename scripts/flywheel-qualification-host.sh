@@ -88,16 +88,42 @@ read_meminfo_kib() {
 }
 
 sha256_file() {
-    python3 - "$1" <<'PY'
+    /usr/bin/python3 -I - "$1" <<'PY'
 import hashlib
+import os
 import pathlib
+import stat
 import sys
 
 digest = hashlib.sha256()
-with pathlib.Path(sys.argv[1]).open("rb") as handle:
+path = pathlib.Path(sys.argv[1])
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+descriptor = os.open(path, flags)
+with os.fdopen(descriptor, "rb") as handle:
+    before = os.fstat(handle.fileno())
+    if not stat.S_ISREG(before.st_mode):
+        raise OSError(f"not a regular file: {path}")
     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
         digest.update(chunk)
+    after = os.fstat(handle.fileno())
+    identity_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    identity_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    if identity_before != identity_after:
+        raise OSError(f"file changed while being hashed: {path}")
 print(digest.hexdigest())
+PY
+}
+
+sha256_stdin() {
+    /usr/bin/python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+}
+
+canonical_path() {
+    /usr/bin/python3 -I - "$1" <<'PY'
+import pathlib
+import sys
+
+print(pathlib.Path(sys.argv[1]).resolve(strict=False))
 PY
 }
 
@@ -161,24 +187,191 @@ else
     record isolation fail "a VM, container, or equivalent isolated host is required"
 fi
 
-git_source=(git -c "safe.directory=$SOURCE_ROOT" -C "$SOURCE_ROOT")
+if [[ -d "$SOURCE_ROOT" ]]; then
+    SOURCE_ROOT="$(cd -- "$SOURCE_ROOT" && pwd -P)"
+fi
+source_requested="$SOURCE_ROOT"
+safe_git_path="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+git_binary=""
+for candidate in /usr/bin/git /opt/homebrew/bin/git /usr/local/bin/git; do
+    if [[ -x "$candidate" ]]; then
+        git_binary="$candidate"
+        break
+    fi
+done
+git_environment=(
+    /usr/bin/env -i
+    "PATH=$safe_git_path"
+    "HOME=/"
+    "LANG=C"
+    "LC_ALL=C"
+    "TZ=UTC"
+    "GIT_ATTR_NOSYSTEM=1"
+    "GIT_CONFIG_NOSYSTEM=1"
+    "GIT_CONFIG_GLOBAL=/dev/null"
+    "GIT_CONFIG_SYSTEM=/dev/null"
+    "GIT_EXTERNAL_DIFF="
+    "GIT_LITERAL_PATHSPECS=1"
+    "GIT_NO_REPLACE_OBJECTS=1"
+    "GIT_OPTIONAL_LOCKS=0"
+    "GIT_TERMINAL_PROMPT=0"
+)
+git_source=(
+    "${git_environment[@]}"
+    "$git_binary"
+    -c "safe.directory=$SOURCE_ROOT"
+    -c core.fsmonitor=false
+    -c core.untrackedCache=false
+    -c core.hooksPath=/dev/null
+    -c diff.external=
+    -c interactive.diffFilter=
+    -C "$SOURCE_ROOT"
+)
+
+tracked_regular_files_match() {
+    local entry=""
+    local metadata=""
+    local mode=""
+    local object_type=""
+    local object_id=""
+    local relative_path=""
+    local regular_count=0
+    [[ "$source_head" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || return 1
+    while IFS= read -r -d '' entry; do
+        [[ "$entry" == *$'\t'* ]] || return 1
+        metadata="${entry%%$'\t'*}"
+        relative_path="${entry#*$'\t'}"
+        read -r mode object_type object_id <<<"$metadata"
+        [[ "$relative_path" != /* \
+            && "$relative_path" != ".." \
+            && "$relative_path" != ../* \
+            && "$relative_path" != */../* \
+            && "$relative_path" != */.. ]] || return 1
+        case "$mode" in
+            100644|100755)
+                [[ "$object_type" == "blob" \
+                    && "$object_id" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ \
+                    && -f "$SOURCE_ROOT/$relative_path" \
+                    && ! -L "$SOURCE_ROOT/$relative_path" ]] || return 1
+                "${git_source[@]}" cat-file blob "$object_id" \
+                    | /usr/bin/cmp -s - "$SOURCE_ROOT/$relative_path" \
+                    || return 1
+                regular_count=$((regular_count + 1))
+                ;;
+        esac
+    done < <("${git_source[@]}" ls-tree -r -z --full-tree "$source_head")
+    ((regular_count > 0))
+}
 source_head=""
 source_tree=""
 source_repository=false
 source_worktree_clean=false
 source_index_clean=false
 source_untracked_clean=false
+source_index_flags_clean=false
+source_sparse_clean=false
+source_unmerged_clean=false
+source_critical_bytes_match=false
+source_repository_binding_stable=false
+source_git_dir=""
+source_common_dir=""
+source_index_path=""
 source_clean=false
-if [[ ( -d "$SOURCE_ROOT/.git" || -f "$SOURCE_ROOT/.git" ) ]] \
+if [[ -n "$git_binary" && ( -d "$SOURCE_ROOT/.git" || -f "$SOURCE_ROOT/.git" ) ]] \
     && "${git_source[@]}" rev-parse --verify HEAD >/dev/null 2>&1; then
-    source_repository=true
-    source_head="$("${git_source[@]}" rev-parse HEAD 2>/dev/null || true)"
-    source_tree="$("${git_source[@]}" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
-    "${git_source[@]}" diff --quiet >/dev/null 2>&1 && source_worktree_clean=true
-    "${git_source[@]}" diff --cached --quiet >/dev/null 2>&1 && source_index_clean=true
-    if "${git_source[@]}" ls-files --others --exclude-standard -z 2>/dev/null \
-        | python3 -c 'import sys; raise SystemExit(1 if sys.stdin.buffer.read(1) else 0)'; then
-        source_untracked_clean=true
+    observed_root="$("${git_source[@]}" rev-parse --path-format=absolute --show-toplevel 2>/dev/null || true)"
+    observed_git_dir="$("${git_source[@]}" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+    observed_common_dir="$("${git_source[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    observed_index_path="$("${git_source[@]}" rev-parse --path-format=absolute --git-path index 2>/dev/null || true)"
+    observed_root="$(canonical_path "$observed_root" 2>/dev/null || true)"
+    source_git_dir="$(canonical_path "$observed_git_dir" 2>/dev/null || true)"
+    source_common_dir="$(canonical_path "$observed_common_dir" 2>/dev/null || true)"
+    source_index_path="$(canonical_path "$observed_index_path" 2>/dev/null || true)"
+    if [[ "$observed_root" == "$SOURCE_ROOT" \
+        && "$source_git_dir" == /* \
+        && "$source_common_dir" == /* \
+        && "$source_index_path" == /* ]]; then
+        source_repository=true
+        source_head="$("${git_source[@]}" rev-parse HEAD 2>/dev/null || true)"
+        source_tree="$("${git_source[@]}" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+        tracked_regular_files_match && source_worktree_clean=true
+        "${git_source[@]}" diff --cached --quiet --no-ext-diff --no-textconv >/dev/null 2>&1 \
+            && source_index_clean=true
+        if "${git_source[@]}" ls-files --others --exclude-standard -z 2>/dev/null \
+            | /usr/bin/python3 -I -c 'import sys; raise SystemExit(1 if sys.stdin.buffer.read(1) else 0)'; then
+            source_untracked_clean=true
+        fi
+        if "${git_source[@]}" ls-files -v -z --cached 2>/dev/null \
+            | /usr/bin/python3 -I -c '
+import sys
+records = [item for item in sys.stdin.buffer.read().split(b"\0") if item]
+raise SystemExit(0 if all(len(item) >= 3 and item[:2] == b"H " for item in records) else 1)
+'; then
+            source_index_flags_clean=true
+        fi
+        if "${git_source[@]}" ls-files -u -z 2>/dev/null \
+            | /usr/bin/python3 -I -c 'import sys; raise SystemExit(1 if sys.stdin.buffer.read(1) else 0)'; then
+            source_unmerged_clean=true
+        fi
+        sparse_value=""
+        if sparse_value="$("${git_source[@]}" config --bool --get core.sparseCheckout 2>/dev/null)"; then
+            [[ "$sparse_value" == "false" ]] && source_sparse_clean=true
+        else
+            sparse_status=$?
+            [[ "$sparse_status" -eq 1 ]] && source_sparse_clean=true
+        fi
+
+        source_critical_bytes_match="$source_worktree_clean"
+        checker_path="$(canonical_path "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+        if [[ "$checker_path" != "$SOURCE_ROOT/scripts/flywheel-qualification-host.sh" ]]; then
+            source_critical_bytes_match=false
+        fi
+
+        final_root="$("${git_source[@]}" rev-parse --path-format=absolute --show-toplevel 2>/dev/null || true)"
+        final_git_dir="$("${git_source[@]}" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+        final_common_dir="$("${git_source[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+        final_index_path="$("${git_source[@]}" rev-parse --path-format=absolute --git-path index 2>/dev/null || true)"
+        final_root="$(canonical_path "$final_root" 2>/dev/null || true)"
+        final_git_dir="$(canonical_path "$final_git_dir" 2>/dev/null || true)"
+        final_common_dir="$(canonical_path "$final_common_dir" 2>/dev/null || true)"
+        final_index_path="$(canonical_path "$final_index_path" 2>/dev/null || true)"
+        final_head="$("${git_source[@]}" rev-parse HEAD 2>/dev/null || true)"
+        final_tree="$("${git_source[@]}" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+        tracked_regular_files_match || source_worktree_clean=false
+        "${git_source[@]}" diff --cached --quiet --no-ext-diff --no-textconv >/dev/null 2>&1 \
+            || source_index_clean=false
+        if ! "${git_source[@]}" ls-files --others --exclude-standard -z 2>/dev/null \
+            | /usr/bin/python3 -I -c 'import sys; raise SystemExit(1 if sys.stdin.buffer.read(1) else 0)'; then
+            source_untracked_clean=false
+        fi
+        if ! "${git_source[@]}" ls-files -v -z --cached 2>/dev/null \
+            | /usr/bin/python3 -I -c '
+import sys
+records = [item for item in sys.stdin.buffer.read().split(b"\0") if item]
+raise SystemExit(0 if all(len(item) >= 3 and item[:2] == b"H " for item in records) else 1)
+'; then
+            source_index_flags_clean=false
+        fi
+        if ! "${git_source[@]}" ls-files -u -z 2>/dev/null \
+            | /usr/bin/python3 -I -c 'import sys; raise SystemExit(1 if sys.stdin.buffer.read(1) else 0)'; then
+            source_unmerged_clean=false
+        fi
+        final_sparse_value=""
+        if final_sparse_value="$("${git_source[@]}" config --bool --get core.sparseCheckout 2>/dev/null)"; then
+            [[ "$final_sparse_value" == "false" ]] || source_sparse_clean=false
+        else
+            final_sparse_status=$?
+            [[ "$final_sparse_status" -eq 1 ]] || source_sparse_clean=false
+        fi
+        tracked_regular_files_match || source_critical_bytes_match=false
+        if [[ "$final_root" == "$SOURCE_ROOT" \
+            && "$final_git_dir" == "$source_git_dir" \
+            && "$final_common_dir" == "$source_common_dir" \
+            && "$final_index_path" == "$source_index_path" \
+            && "$final_head" == "$source_head" \
+            && "$final_tree" == "$source_tree" ]]; then
+            source_repository_binding_stable=true
+        fi
     fi
 fi
 if [[ "$source_repository" == "true" \
@@ -186,7 +379,12 @@ if [[ "$source_repository" == "true" \
     && "$source_tree" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ \
     && "$source_worktree_clean" == "true" \
     && "$source_index_clean" == "true" \
-    && "$source_untracked_clean" == "true" ]]; then
+    && "$source_untracked_clean" == "true" \
+    && "$source_index_flags_clean" == "true" \
+    && "$source_sparse_clean" == "true" \
+    && "$source_unmerged_clean" == "true" \
+    && "$source_critical_bytes_match" == "true" \
+    && "$source_repository_binding_stable" == "true" ]]; then
     source_clean=true
     record source_identity pass "$source_head/$source_tree; clean checkout"
 else
@@ -222,7 +420,7 @@ memory_kib="${memory_kib:-0}"
 swap_kib="${swap_kib:-0}"
 
 if [[ "$FORMAT" == "json" ]]; then
-    printf '%s\n' "${checks[@]}" | python3 -c '
+    printf '%s\n' "${checks[@]}" | /usr/bin/python3 -I -c '
 import hashlib
 import json
 import sys
@@ -242,10 +440,19 @@ import sys
     swap_kib,
     source_head,
     source_tree,
+    source_requested,
+    source_git_dir,
+    source_common_dir,
+    source_index_path,
     source_repository,
     source_worktree_clean,
     source_index_clean,
     source_untracked_clean,
+    source_index_flags_clean,
+    source_sparse_clean,
+    source_unmerged_clean,
+    source_critical_bytes_match,
+    source_repository_binding_stable,
     source_clean,
     bundle_sha256,
     bundle_head,
@@ -280,6 +487,7 @@ receipt = {
         "minimum_bash_major": 4,
         "isolation_required": True,
         "clean_source_identity_required": True,
+        "critical_source_bytes_required": ["all-tracked-regular-files"],
         "exact_bundle_identity_required": True,
         "receipt_digest": "sha256(canonical-json-without-receipt_sha256+newline)",
     },
@@ -297,12 +505,24 @@ receipt = {
     "source": {
         "head": source_head or None,
         "tree": source_tree or None,
+        "requested_root": source_requested,
+        "git_paths": {
+            "root": source_requested,
+            "git_dir": source_git_dir or None,
+            "common_dir": source_common_dir or None,
+            "index": source_index_path or None,
+        },
         "clean": as_bool(source_clean),
         "clean_state_evidence": {
             "git_repository": as_bool(source_repository),
             "worktree_clean": as_bool(source_worktree_clean),
             "index_clean": as_bool(source_index_clean),
             "untracked_clean": as_bool(source_untracked_clean),
+            "index_flags_clean": as_bool(source_index_flags_clean),
+            "sparse_checkout_disabled": as_bool(source_sparse_clean),
+            "unmerged_index_clean": as_bool(source_unmerged_clean),
+            "critical_source_bytes_match": as_bool(source_critical_bytes_match),
+            "repository_binding_stable": as_bool(source_repository_binding_stable),
         },
     },
     "bundle": {
@@ -321,8 +541,11 @@ print(json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=Fa
         "$OBSERVED_AT" "$MIN_DISK_GIB" "$MIN_MEMORY_GIB" "$MIN_SWAP_GIB" \
         "$os_id" "$os_version" "$arch" "$bash_version" "$virtualization" \
         "$disk_kib" "$memory_kib" "$swap_kib" \
-        "$source_head" "$source_tree" "$source_repository" "$source_worktree_clean" \
-        "$source_index_clean" "$source_untracked_clean" "$source_clean" \
+        "$source_head" "$source_tree" "$source_requested" "$source_git_dir" \
+        "$source_common_dir" "$source_index_path" "$source_repository" \
+        "$source_worktree_clean" "$source_index_clean" "$source_untracked_clean" \
+        "$source_index_flags_clean" "$source_sparse_clean" "$source_unmerged_clean" \
+        "$source_critical_bytes_match" "$source_repository_binding_stable" "$source_clean" \
         "$bundle_sha256" "$bundle_head" "$bundle_valid"
 else
     for item in "${checks[@]}"; do

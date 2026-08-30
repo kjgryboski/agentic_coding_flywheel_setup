@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -80,6 +81,9 @@ OPS_PILOT_EVIDENCE_SHA256 = {
         "bfdda916f4d268bbb280434c4a7406ed9ee03465d237208927c6fd1f028ece32",
 }
 RECEIPT_MAXIMUM_BYTES = 4 * 1024 * 1024
+SAFE_EXECUTION_PATH = os.pathsep.join((
+    "/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin", "/opt/homebrew/bin",
+))
 
 
 class ControlError(ValueError):
@@ -176,21 +180,36 @@ def normalize_repository_name(value: str) -> str:
 
 
 def git_environment() -> dict[str, str]:
-    environment = os.environ.copy()
-    environment.update({
+    # Deliberately construct, rather than inherit, the child environment. Git
+    # has a broad GIT_* environment API: repository, worktree, index, object,
+    # namespace, config-injection, transport, and trace variables can all alter
+    # an otherwise read-only inspection. Only the fixed controls below cross
+    # the trust boundary.
+    environment = {
+        "PATH": SAFE_EXECUTION_PATH,
+        "HOME": os.path.abspath(os.sep),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "TZ": "UTC",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_SYSTEM": os.devnull,
         "GIT_EXTERNAL_DIFF": "",
+        "GIT_LITERAL_PATHSPECS": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_OPTIONAL_LOCKS": "0",
         "GIT_TERMINAL_PROMPT": "0",
-    })
+    }
     return environment
 
 
 def git_command(root: pathlib.Path, *arguments: str) -> list[str]:
+    git_binary = shutil.which("git", path=SAFE_EXECUTION_PATH)
+    if not git_binary:
+        raise ControlError("Git is unavailable on the trusted execution path")
     return [
-        "git",
+        git_binary,
         "-c", "core.fsmonitor=false",
         "-c", "core.untrackedCache=false",
         "-c", f"core.hooksPath={os.devnull}",
@@ -223,6 +242,139 @@ def git(root: pathlib.Path, *arguments: str) -> str:
     if len(completed.stdout) > 16 * 1024 * 1024:
         raise ControlError(f"Git inspection output exceeds 16 MiB for {root}")
     return completed.stdout.decode("utf-8", errors="replace")
+
+
+def _absolute_git_path(root: pathlib.Path, option: str, *arguments: str) -> str:
+    observed = git(root, "rev-parse", "--path-format=absolute", option, *arguments).strip()
+    if not observed or "\0" in observed or "\n" in observed or not os.path.isabs(observed):
+        raise ControlError(f"Git returned an invalid {option} path for {root}")
+    return str(pathlib.Path(observed).resolve(strict=False))
+
+
+def repository_binding(root: pathlib.Path) -> dict[str, str]:
+    observed_root = _absolute_git_path(root, "--show-toplevel")
+    return {
+        "root": observed_root,
+        "git_dir": _absolute_git_path(root, "--git-dir"),
+        "common_dir": _absolute_git_path(root, "--git-common-dir"),
+        "index": _absolute_git_path(root, "--git-path", "index"),
+    }
+
+
+def resolve_repository(candidate: str) -> tuple[pathlib.Path, pathlib.Path, dict[str, str]]:
+    requested = pathlib.Path(candidate).expanduser().resolve(strict=True)
+    probe = requested if requested.is_dir() else requested.parent
+    root_text = git(probe, "rev-parse", "--path-format=absolute", "--show-toplevel").strip()
+    if not root_text or "\0" in root_text or "\n" in root_text or not os.path.isabs(root_text):
+        raise ControlError("Git returned an invalid repository root")
+    root = pathlib.Path(root_text).resolve(strict=True)
+    if not root.is_dir():
+        raise ControlError(f"repository root is not a directory: {root}")
+    try:
+        requested.relative_to(root)
+    except ValueError as error:
+        raise ControlError(f"requested path is outside the returned repository root: {requested}") from error
+    binding = repository_binding(root)
+    if binding["root"] != str(root):
+        raise ControlError("repository root changed while Git paths were being bound")
+    return requested, root, binding
+
+
+def validate_git_paths(value: object, expected_root: str, label: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ControlError(f"{label} must be an object")
+    exact_keys(value, {"root", "git_dir", "common_dir", "index"}, label)
+    for field in ("root", "git_dir", "common_dir", "index"):
+        observed = value.get(field)
+        if (
+            not isinstance(observed, str)
+            or not observed
+            or "\0" in observed
+            or "\n" in observed
+            or not os.path.isabs(observed)
+            or str(pathlib.Path(observed).resolve(strict=False)) != observed
+        ):
+            raise ControlError(f"{label}.{field} must be a canonical absolute path")
+    if value["root"] != expected_root:
+        raise ControlError(f"{label}.root contradicts its repository root")
+    return value
+
+
+def validate_requested_path(requested: object, root: object, label: str) -> tuple[str, str]:
+    for observed, field in ((requested, "requested_path"), (root, "root")):
+        if (
+            not isinstance(observed, str)
+            or not observed
+            or "\0" in observed
+            or "\n" in observed
+            or not os.path.isabs(observed)
+            or str(pathlib.Path(observed).resolve(strict=False)) != observed
+        ):
+            raise ControlError(f"{label}.{field} must be a canonical absolute path")
+    try:
+        pathlib.Path(requested).relative_to(pathlib.Path(root))
+    except ValueError as error:
+        raise ControlError(f"{label}.requested_path is outside its repository root") from error
+    return requested, root
+
+
+def _git_config_values(root: pathlib.Path, key: str) -> list[str]:
+    completed = git_result(root, "config", "--get-all", key)
+    if completed.returncode == 1:
+        return []
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise ControlError(f"Git could not read {key}: {detail or 'unknown error'}")
+    try:
+        output = completed.stdout.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ControlError(f"Git {key} is not valid UTF-8") from error
+    values = output.splitlines()
+    if any(not item or "\0" in item for item in values):
+        raise ControlError(f"Git {key} contains an empty or unsafe value")
+    return values
+
+
+def _one_git_output_line(root: pathlib.Path, label: str, *arguments: str) -> str:
+    output = git(root, *arguments)
+    values = output.splitlines()
+    if len(values) != 1 or not values[0] or "\0" in values[0]:
+        raise ControlError(f"{label} must resolve to exactly one URL")
+    return values[0]
+
+
+def bind_origin(root: pathlib.Path, expected_repository: str) -> dict[str, str]:
+    configured_fetch = _git_config_values(root, "remote.origin.url")
+    if len(configured_fetch) != 1:
+        raise ControlError("origin must configure exactly one fetch URL")
+    configured_push = _git_config_values(root, "remote.origin.pushurl")
+    if len(configured_push) > 1:
+        raise ControlError("origin must not configure multiple push URLs")
+    if _git_config_values(root, "remote.origin.mirror"):
+        raise ControlError("origin mirror configuration is not permitted")
+
+    fetch_url = _one_git_output_line(root, "origin fetch", "remote", "get-url", "--all", "origin")
+    push_url = _one_git_output_line(
+        root, "origin effective push", "remote", "get-url", "--push", "--all", "origin"
+    )
+    expected_fetch_url = configured_fetch[0]
+    expected_push_url = configured_push[0] if configured_push else expected_fetch_url
+    if fetch_url != expected_fetch_url or push_url != expected_push_url:
+        raise ControlError("origin URL rewriting is not permitted for eligibility binding")
+
+    fetch_repository = canonical_github_repository(fetch_url)
+    push_repository = canonical_github_repository(push_url)
+    if fetch_repository != expected_repository or push_repository != expected_repository:
+        raise ControlError(
+            "origin fetch and push destinations must both identify " + expected_repository
+        )
+    return {
+        "name": "origin",
+        "fetch_url": fetch_url,
+        "fetch_repository": fetch_repository,
+        "push_url": push_url,
+        "push_repository": push_repository,
+    }
 
 
 def repository_status(root: pathlib.Path) -> str:
@@ -389,9 +541,7 @@ def validate_synthetic_pilot(raw: bytes, value: dict[str, Any]) -> dict[str, Any
 
 
 def bind_pilot_source(pilot: dict[str, Any], candidate: str) -> dict[str, Any]:
-    requested = pathlib.Path(candidate).expanduser().resolve(strict=True)
-    probe = requested if requested.is_dir() else requested.parent
-    root = pathlib.Path(git(probe, "rev-parse", "--show-toplevel").strip()).resolve(strict=True)
+    requested, root, git_paths = resolve_repository(candidate)
     head = git(root, "rev-parse", "HEAD").strip()
     tree = git(root, "rev-parse", "HEAD^{tree}").strip()
     status_output = repository_status(root)
@@ -411,15 +561,18 @@ def bind_pilot_source(pilot: dict[str, Any], candidate: str) -> dict[str, Any]:
         if observed_sha256 != expected_sha256:
             raise ControlError(f"Ops pilot evidence has drifted: {relative_path}")
     final_identity = (
+        repository_binding(root),
         git(root, "rev-parse", "HEAD").strip(),
         git(root, "rev-parse", "HEAD^{tree}").strip(),
         repository_status(root),
         git(root, "remote", "get-url", "origin").strip(),
     )
-    if final_identity != (head, tree, status_output, remote_url):
+    if final_identity != (git_paths, head, tree, status_output, remote_url):
         raise ControlError("Ops pilot source changed while it was being verified")
     return {
+        "requested_path": str(requested),
         "root": str(root),
+        "git_paths": git_paths,
         "repository": remote_repository,
         "remote_url": remote_url,
         "head": head,
@@ -430,6 +583,22 @@ def bind_pilot_source(pilot: dict[str, Any], candidate: str) -> dict[str, Any]:
 
 
 def validate_plan_receipt(raw: bytes, value: dict[str, Any]) -> dict[str, Any]:
+    exact_keys(value, {
+        "schema", "status", "execution_status", "mutation_authorized", "inventory_sha256",
+        "repository_count", "repositories_requiring_attention", "cohorts",
+        "promotion_contract", "plan_sha256",
+    }, "progressive rollout plan")
+    if value.get("schema") != PLAN_SCHEMA:
+        raise ControlError(f"progressive rollout plan schema must be {PLAN_SCHEMA}")
+    if value.get("status") not in {"attention", "ready_for_setup_prs"}:
+        raise ControlError("progressive rollout plan status is invalid")
+    if value.get("execution_status") != "plan_only":
+        raise ControlError("progressive rollout plan must declare execution_status=plan_only")
+    if value.get("mutation_authorized") is not False:
+        raise ControlError("progressive rollout plan must declare mutation_authorized=false")
+    if not is_hex(value.get("inventory_sha256"), 64):
+        raise ControlError("progressive rollout plan inventory digest is invalid")
+
     plan_digest = value.get("plan_sha256")
     digest_source = dict(value)
     digest_source.pop("plan_sha256", None)
@@ -440,18 +609,125 @@ def validate_plan_receipt(raw: bytes, value: dict[str, Any]) -> dict[str, Any]:
         or raw != canonical_bytes(value)
         or not isinstance(cohorts, list)
         or not cohorts
-        or any(not isinstance(item, dict) or not isinstance(item.get("repository"), dict) for item in cohorts)
+        or len(cohorts) > 100
     ):
         raise ControlError("progressive rollout plan content binding is invalid")
+
+    repository_count = value.get("repository_count")
+    attention = value.get("repositories_requiring_attention")
+    if (
+        isinstance(repository_count, bool)
+        or not isinstance(repository_count, int)
+        or repository_count != len(cohorts)
+        or not isinstance(attention, list)
+        or any(not isinstance(item, str) or not item or "\0" in item for item in attention)
+    ):
+        raise ControlError("progressive rollout plan repository totals are invalid")
+    expected_promotion_contract = {
+        "pilot": "accepted exact-head pilot evidence",
+        "low-risk": "pilot accepted",
+        "standard": "pilot and low-risk cohort accepted",
+        "critical": "all earlier cohorts accepted with rollback evidence",
+    }
+    promotion_contract = value.get("promotion_contract")
+    if not isinstance(promotion_contract, dict):
+        raise ControlError("progressive rollout promotion contract must be an object")
+    exact_keys(promotion_contract, set(expected_promotion_contract), "progressive rollout promotion contract")
+    if promotion_contract != expected_promotion_contract:
+        raise ControlError("progressive rollout promotion contract is invalid")
+
+    roots: set[str] = set()
+    validated_rows: list[dict[str, Any]] = []
+    pilot_count = 0
+    for index, row in enumerate(cohorts):
+        if not isinstance(row, dict):
+            raise ControlError(f"progressive rollout cohort {index} must be an object")
+        exact_keys(row, {
+            "cohort", "cohort_order", "repository", "inspection_sha256", "setup_pr_eligible",
+            "live_rollout_eligible", "required_gate",
+        }, f"progressive rollout cohort {index}")
+        cohort = row.get("cohort")
+        repository = row.get("repository")
+        if cohort not in COHORT_ORDER or not isinstance(repository, dict):
+            raise ControlError(f"progressive rollout cohort {index} identity is invalid")
+        exact_keys(repository, {
+            "name", "requested_path", "root", "git_paths", "head", "tree", "branch", "clean",
+            "change_record_count",
+        }, f"progressive rollout cohort {index} repository")
+        name = repository.get("name")
+        requested_path = repository.get("requested_path")
+        root = repository.get("root")
+        branch = repository.get("branch")
+        change_count = repository.get("change_record_count")
+        if (
+            not isinstance(name, str)
+            or not name
+            or any(character in name for character in ("\0", "\n", "/"))
+            or not isinstance(requested_path, str)
+            or not isinstance(root, str)
+            or pathlib.Path(root).name != name
+            or (branch is not None and (
+                not isinstance(branch, str) or not branch or "\0" in branch or "\n" in branch
+            ))
+            or not is_hex(repository.get("head"), 40)
+            or not is_hex(repository.get("tree"), 40)
+            or not isinstance(repository.get("clean"), bool)
+            or isinstance(change_count, bool)
+            or not isinstance(change_count, int)
+            or change_count < 0
+            or repository.get("clean") is not (change_count == 0)
+        ):
+            raise ControlError(f"progressive rollout cohort {index} repository is invalid")
+        validate_requested_path(
+            requested_path, root, f"progressive rollout cohort {index} repository"
+        )
+        validate_git_paths(
+            repository.get("git_paths"), root, f"progressive rollout cohort {index} Git paths"
+        )
+        if root in roots:
+            raise ControlError("progressive rollout plan repeats a repository root")
+        roots.add(root)
+        pilot_count += cohort == "pilot"
+        setup_pr_eligible = row.get("setup_pr_eligible")
+        cohort_order = row.get("cohort_order")
+        if (
+            isinstance(cohort_order, bool)
+            or not isinstance(cohort_order, int)
+            or cohort_order != COHORT_ORDER[cohort]
+            or not is_hex(row.get("inspection_sha256"), 64)
+            or not isinstance(setup_pr_eligible, bool)
+            or (setup_pr_eligible and repository.get("clean") is not True)
+            or row.get("live_rollout_eligible") is not False
+            or row.get("required_gate") != _required_gate(cohort)
+        ):
+            raise ControlError(f"progressive rollout cohort {index} claims are invalid")
+        validated_rows.append(row)
+    if pilot_count != 1:
+        raise ControlError("progressive rollout plan must contain exactly one pilot")
+    expected_order = sorted(
+        validated_rows,
+        key=lambda row: (
+            row["cohort_order"], row["repository"]["name"].casefold(), row["repository"]["root"]
+        ),
+    )
+    if validated_rows != expected_order:
+        raise ControlError("progressive rollout cohorts are not in canonical order")
+    expected_attention = [
+        row["repository"]["name"] for row in validated_rows if row["setup_pr_eligible"] is False
+    ]
+    expected_status = "attention" if expected_attention else "ready_for_setup_prs"
+    if attention != expected_attention or value["status"] != expected_status:
+        raise ControlError("progressive rollout attention summary contradicts its cohorts")
+
     repositories = [item["repository"] for item in cohorts]
     return {
         "status": "evidence_connected",
         "artifact_sha256": hashlib.sha256(raw).hexdigest(),
         "schema": PLAN_SCHEMA,
-        "declared_status": value.get("status"),
+        "declared_status": value["status"],
         "scope": "plan-only",
-        "execution_status": value.get("execution_status"),
-        "mutation_authorized": value.get("mutation_authorized"),
+        "execution_status": "plan_only",
+        "mutation_authorized": False,
         "repository": repositories[0] if len(repositories) == 1 else None,
         "repositories": repositories,
         "repository_count": len(repositories),
@@ -497,10 +773,12 @@ def validate_eligibility_receipt(raw: bytes, value: dict[str, Any]) -> dict[str,
     if validated_pilot["declared_status"] != "pass":
         raise ControlError("repository eligibility embedded pilot did not pass")
     exact_keys(source, {
-        "root", "repository", "remote_url", "head", "tree", "clean", "evidence_verified",
+        "requested_path", "root", "git_paths", "repository", "remote_url", "head", "tree",
+        "clean", "evidence_verified",
     }, "repository eligibility pilot source")
     if (
-        not isinstance(source.get("root"), str)
+        not isinstance(source.get("requested_path"), str)
+        or not isinstance(source.get("root"), str)
         or not isinstance(source.get("remote_url"), str)
         or source.get("repository") != OPS_REPOSITORY
         or pilot.get("artifact_sha256") != validated_pilot["artifact_sha256"]
@@ -510,15 +788,20 @@ def validate_eligibility_receipt(raw: bytes, value: dict[str, Any]) -> dict[str,
         or source.get("evidence_verified") is not True
     ):
         raise ControlError("repository eligibility pilot binding is invalid")
+    validate_requested_path(
+        source.get("requested_path"), source.get("root"), "repository eligibility pilot source"
+    )
+    validate_git_paths(source.get("git_paths"), source["root"], "repository eligibility pilot Git paths")
     if canonical_github_repository(source["remote_url"]) != OPS_REPOSITORY:
         raise ControlError("repository eligibility pilot source origin is invalid")
-    observed_source = bind_pilot_source(validated_pilot, source.get("root", ""))
+    observed_source = bind_pilot_source(validated_pilot, source.get("requested_path", ""))
     if observed_source != source:
         raise ControlError("repository eligibility pilot source binding has drifted")
 
     exact_keys(target, {
-        "name", "root", "repository", "remote", "branch", "canonical_branch", "head", "tree",
-        "clean", "divergence", "upstream", "instructions", "inspection_sha256",
+        "name", "requested_path", "root", "git_paths", "repository", "remote", "branch",
+        "canonical_branch", "head", "tree", "clean", "divergence", "upstream",
+        "instructions", "inspection_sha256",
     }, "repository eligibility target")
     remote = target.get("remote")
     divergence = target.get("divergence")
@@ -526,16 +809,21 @@ def validate_eligibility_receipt(raw: bytes, value: dict[str, Any]) -> dict[str,
     instructions = target.get("instructions")
     if not all(isinstance(item, dict) for item in (remote, divergence, upstream, instructions)):
         raise ControlError("repository eligibility target bindings must be objects")
-    exact_keys(remote, {"name", "url", "repository"}, "repository eligibility target remote")
+    exact_keys(remote, {
+        "name", "fetch_url", "fetch_repository", "push_url", "push_repository",
+    }, "repository eligibility target remote")
     exact_keys(divergence, {"ahead", "behind"}, "repository eligibility target divergence")
     exact_keys(upstream, {"ref", "head", "tree", "observed_locally"}, "repository eligibility upstream")
     exact_keys(instructions, {"path", "sha256", "size"}, "repository eligibility instructions")
     if (
         not isinstance(target.get("name"), str)
+        or not isinstance(target.get("requested_path"), str)
         or not isinstance(target.get("root"), str)
         or not isinstance(target.get("repository"), str)
-        or not isinstance(remote.get("url"), str)
-        or target.get("repository") != remote.get("repository")
+        or not isinstance(remote.get("fetch_url"), str)
+        or not isinstance(remote.get("push_url"), str)
+        or target.get("repository") != remote.get("fetch_repository")
+        or target.get("repository") != remote.get("push_repository")
         or remote.get("name") != "origin"
         or target.get("branch") != "main"
         or target.get("canonical_branch") != "main"
@@ -555,9 +843,18 @@ def validate_eligibility_receipt(raw: bytes, value: dict[str, Any]) -> dict[str,
         or instructions.get("size", -1) < 0
     ):
         raise ControlError("repository eligibility target identity is invalid")
-    if canonical_github_repository(remote.get("url", "")) != target.get("repository"):
+    validate_requested_path(
+        target.get("requested_path"), target.get("root"), "repository eligibility target"
+    )
+    validate_git_paths(target.get("git_paths"), target["root"], "repository eligibility target Git paths")
+    if (
+        canonical_github_repository(remote.get("fetch_url", "")) != target.get("repository")
+        or canonical_github_repository(remote.get("push_url", "")) != target.get("repository")
+    ):
         raise ControlError("repository eligibility target origin contradicts its repository identity")
-    observed_target = bind_target_repository(target.get("root", ""), target.get("repository", ""))
+    observed_target = bind_target_repository(
+        target.get("requested_path", ""), target.get("repository", "")
+    )
     if observed_target != target:
         raise ControlError("repository eligibility target binding has drifted")
 
@@ -607,9 +904,7 @@ def repository_files(root: pathlib.Path) -> list[str]:
 
 
 def inspect_repository(candidate: str) -> dict[str, Any]:
-    requested = pathlib.Path(candidate).expanduser().resolve(strict=True)
-    probe = requested if requested.is_dir() else requested.parent
-    root = pathlib.Path(git(probe, "rev-parse", "--show-toplevel").strip()).resolve(strict=True)
+    requested, root, git_paths = resolve_repository(candidate)
     head = git(root, "rev-parse", "HEAD").strip()
     tree = git(root, "rev-parse", "HEAD^{tree}").strip()
     branch = git(root, "symbolic-ref", "--quiet", "--short", "HEAD").strip() if _has_branch(root) else None
@@ -640,11 +935,12 @@ def inspect_repository(candidate: str) -> dict[str, Any]:
         }
 
     final_identity = (
+        repository_binding(root),
         git(root, "rev-parse", "HEAD").strip(),
         git(root, "rev-parse", "HEAD^{tree}").strip(),
         repository_status(root),
     )
-    if final_identity != (head, tree, status_output):
+    if final_identity != (git_paths, head, tree, status_output):
         raise ControlError(f"Repository changed while being inspected: {root}")
 
     clean = not status_records
@@ -666,7 +962,9 @@ def inspect_repository(candidate: str) -> dict[str, Any]:
         "mutation_authorized": False,
         "repository": {
             "name": root.name,
+            "requested_path": str(requested),
             "root": str(root),
+            "git_paths": git_paths,
             "head": head,
             "tree": tree,
             "branch": branch,
@@ -713,12 +1011,7 @@ def bind_target_repository(target_path: str, expected_target_repository: str) ->
     if not isinstance(instructions, dict):
         raise ControlError("target repository needs a stable root AGENTS.md instructions digest")
 
-    remote_url = git(root, "remote", "get-url", "origin").strip()
-    observed_target_repository = canonical_github_repository(remote_url)
-    if observed_target_repository != target_repository:
-        raise ControlError(
-            f"target origin identifies {observed_target_repository}, expected {target_repository}"
-        )
+    origin = bind_origin(root, target_repository)
     upstream_ref = "refs/remotes/origin/main"
     upstream_head = git(root, "rev-parse", "--verify", upstream_ref).strip()
     upstream_tree = git(root, "rev-parse", f"{upstream_ref}^{{tree}}").strip()
@@ -730,26 +1023,29 @@ def bind_target_repository(target_path: str, expected_target_repository: str) ->
         raise ControlError("target repository has drifted from the locally observed origin/main")
 
     final_identity = (
+        repository_binding(root),
         git(root, "rev-parse", "HEAD").strip(),
         git(root, "rev-parse", "HEAD^{tree}").strip(),
         repository_status(root),
         git(root, "symbolic-ref", "--quiet", "--short", "HEAD").strip(),
-        git(root, "remote", "get-url", "origin").strip(),
+        bind_origin(root, target_repository),
         git(root, "rev-parse", "--verify", upstream_ref).strip(),
         git(root, "rev-parse", f"{upstream_ref}^{{tree}}").strip(),
         tuple(git(root, "rev-list", "--left-right", "--count", f"HEAD...{upstream_ref}").split()),
     )
     expected_identity = (
-        repository["head"], repository["tree"], "", "main", remote_url,
+        repository["git_paths"], repository["head"], repository["tree"], "", "main", origin,
         upstream_head, upstream_tree, (str(ahead), str(behind)),
     )
     if final_identity != expected_identity:
         raise ControlError("target repository changed while eligibility was being evaluated")
     return {
         "name": repository["name"],
+        "requested_path": repository["requested_path"],
         "root": repository["root"],
+        "git_paths": repository["git_paths"],
         "repository": target_repository,
-        "remote": {"name": "origin", "url": remote_url, "repository": target_repository},
+        "remote": origin,
         "branch": "main",
         "canonical_branch": "main",
         "head": repository["head"],

@@ -3,7 +3,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flywheel-lifecycle-test.XXXXXXXX")"
+test_status=0
 trap 'rm -rf -- "$TEST_ROOT"' EXIT
+trap 'test_status=$?; printf "flywheel lifecycle test failed at line %s (exit %s)\n" "$LINENO" "$test_status" >&2' ERR
 
 CALLS="$TEST_ROOT/calls"
 STATUS_FILE="$TEST_ROOT/status"
@@ -39,12 +41,179 @@ case "${1:-}" in
         ;;
     shell)
         printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
+        if [[ "$*" == *flywheel-verify-exact-guest-source* ]]; then
+            shift
+            while (($#)) && [[ "$1" != "--" ]]; do
+                shift
+            done
+            (($#))
+            shift
+            remote_command=("$@")
+            if [[ "${remote_command[0]:-}" == "sudo" ]]; then
+                remote_command=("${remote_command[@]:1}")
+            fi
+            for index in "${!remote_command[@]}"; do
+                if [[ "${remote_command[$index]}" == /opt/agent-flywheel-acfs-* \
+                    && -n "${FLYWHEEL_TEST_GUEST_ROOT:-}" ]]; then
+                    remote_command[$index]="$FLYWHEEL_TEST_GUEST_ROOT"
+                fi
+            done
+            "${remote_command[@]}"
+            exit
+        fi
         case "$*" in
             *flywheel-qualification-host.sh*)
-                printf '{"schema":"agent-flywheel.qualification-host/v1","status":"pass","summary":{"pass":6,"fail":0}}\n'
+                /usr/bin/python3 -I - "$FLYWHEEL_STATE_HOME/installation.json" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+installation = json.load(open(sys.argv[1], encoding="utf-8"))
+source = installation["source"]
+bundle = installation["bundle"]
+requirement_ids = [
+    "ubuntu_version", "architecture", "bash_runtime", "disk_free", "memory_total",
+    "swap_total", "isolation", "source_identity", "bundle_identity",
+]
+receipt = {
+    "schema": "agent-flywheel.qualification-host/v1",
+    "observed_at": "2026-08-30T12:00:00Z",
+    "contract": {
+        "host_identity": "any-compliant-host",
+        "ubuntu_version": "24.04",
+        "architectures": ["aarch64", "x86_64"],
+        "minimum_disk_gib": 20,
+        "minimum_memory_gib": 8,
+        "minimum_swap_gib": 8,
+        "minimum_bash_major": 4,
+        "isolation_required": True,
+        "clean_source_identity_required": True,
+        "critical_source_bytes_required": ["all-tracked-regular-files"],
+        "exact_bundle_identity_required": True,
+        "receipt_digest": "sha256(canonical-json-without-receipt_sha256+newline)",
+    },
+    "host": {
+        "os": {"id": "ubuntu", "version": "24.04"},
+        "architecture": "aarch64",
+        "bash_version": "5.2.0",
+        "isolation": "qemu",
+        "resources": {
+            "disk_free_bytes": 30 * 1024**3,
+            "memory_total_bytes": 10 * 1024**3,
+            "swap_total_bytes": 8 * 1024**3,
+        },
+    },
+    "source": {
+        "head": source["head"],
+        "tree": source["tree"],
+        "requested_root": source["guest_root"],
+        "git_paths": {
+            "root": source["guest_root"],
+            "git_dir": source["guest_root"] + "/.git",
+            "common_dir": source["guest_root"] + "/.git",
+            "index": source["guest_root"] + "/.git/index",
+        },
+        "clean": True,
+        "clean_state_evidence": {
+            "git_repository": True,
+            "worktree_clean": True,
+            "index_clean": True,
+            "untracked_clean": True,
+            "index_flags_clean": True,
+            "sparse_checkout_disabled": True,
+            "unmerged_index_clean": True,
+            "critical_source_bytes_match": True,
+            "repository_binding_stable": True,
+        },
+    },
+    "bundle": {
+        "sha256": bundle["sha256"],
+        "source_head": source["head"],
+        "verified": True,
+    },
+    "status": "pass",
+    "requirements": [
+        {"id": identifier, "status": "pass", "detail": "test evidence"}
+        for identifier in requirement_ids
+    ],
+    "summary": {"pass": 9, "fail": 0},
+}
+mutation = os.environ.get("FLYWHEEL_TEST_QUALIFICATION_MUTATION", "")
+if mutation == "wrong-schema":
+    receipt["schema"] = "agent-flywheel.qualification-host/forged"
+elif mutation == "extra-field":
+    receipt["claim"] = "PARTIAL_SAFE"
+elif mutation == "wrong-source":
+    receipt["source"]["head"] = "0" * 40
+elif mutation == "wrong-bundle":
+    receipt["bundle"]["sha256"] = "0" * 64
+elif mutation == "inconsistent-summary":
+    receipt["summary"] = {"pass": 8, "fail": 1}
+canonical = json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
+receipt["receipt_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
+if mutation == "bad-digest":
+    receipt["receipt_sha256"] = "0" * 64
+print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+PY
                 ;;
             *flywheel-partial-safe-doctor.sh*)
-                printf '{"schema":"agent-flywheel.partial-safe-doctor/v1","claim":"PARTIAL_SAFE","status":"pass","summary":{"pass":13,"warn":0,"fail":0}}\n'
+                /usr/bin/python3 -I - "$FLYWHEEL_STATE_HOME/installation.json" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+installation = json.load(open(sys.argv[1], encoding="utf-8"))
+license_cleared = installation["authority"]["kind"] == "license_clearance"
+check_ids = [
+    "license_clearance" if license_cleared else "allowlist",
+    "target_identity", "base.system", "users.ubuntu", "host.swap_contract",
+    "base.filesystem", "cli.modern", "lang.bun/bun", "lang.uv/uv",
+    "lang.rust/rustc", "lang.rust/cargo", "lang.go/go",
+    "license_scope" if license_cleared else "held_exclusions",
+]
+if license_cleared:
+    check_ids.extend(["expanded_modules", "stack.srps/service", "independent_holds"])
+check_ids.append("state")
+receipt = {
+    "schema": "agent-flywheel.license-cleared-doctor/v1" if license_cleared else "agent-flywheel.partial-safe-doctor/v1",
+    "claim": installation["claim"],
+    "fully_commissioned": False,
+    "status": "pass",
+    "source": {
+        "head": installation["source"]["head"],
+        "tree": installation["source"]["tree"],
+    },
+    "authority": {
+        "kind": installation["authority"]["kind"],
+        "sha256": installation["authority"]["sha256"],
+    },
+    "checks": [
+        {"id": identifier, "status": "pass", "detail": "test evidence"}
+        for identifier in check_ids
+    ],
+    "summary": {"pass": len(check_ids), "warn": 0, "fail": 0},
+}
+mutation = os.environ.get("FLYWHEEL_TEST_DOCTOR_MUTATION", "")
+if mutation == "wrong-schema":
+    receipt["schema"] = "agent-flywheel.partial-safe-doctor/forged"
+elif mutation == "extra-field":
+    receipt["installed"] = True
+elif mutation == "wrong-claim":
+    receipt["claim"] = "FULLY_COMMISSIONED"
+elif mutation == "wrong-source":
+    receipt["source"]["tree"] = "0" * 40
+elif mutation == "wrong-authority":
+    receipt["authority"]["sha256"] = "0" * 64
+elif mutation == "inconsistent-summary":
+    receipt["summary"] = {"pass": len(check_ids) - 1, "warn": 0, "fail": 1}
+canonical = json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
+receipt["receipt_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
+if mutation == "bad-digest":
+    receipt["receipt_sha256"] = "0" * 64
+print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+PY
                 ;;
         esac
         ;;
@@ -78,6 +247,11 @@ printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
 [[ "${1:-}" == "--stateful" && "${2:-}" == "--" ]]
 shift 2
 "$@"
+if [[ -n "${FLYWHEEL_TEST_POST_HEAVY_MUTATE_ROOT:-}" ]]; then
+    printf '\n# post-preflight launcher drift\n' >>"$FLYWHEEL_TEST_POST_HEAVY_MUTATE_ROOT/flywheel"
+    chmod u+w "$FLYWHEEL_TEST_POST_HEAVY_MUTATE_ROOT/config/flywheel-partial-safe-allowlist.json"
+    printf '\n ' >>"$FLYWHEEL_TEST_POST_HEAVY_MUTATE_ROOT/config/flywheel-partial-safe-allowlist.json"
+fi
 SH
 
 chmod 0755 "$TEST_ROOT/limactl" "$TEST_ROOT/heavy-run"
@@ -114,7 +288,8 @@ assert "supported_hosts" not in value["commissioning_scope"]
 PY
 
 QUALIFICATION_ROOT="$TEST_ROOT/qualification-source"
-mkdir -p "$QUALIFICATION_ROOT/config" "$QUALIFICATION_ROOT/.github/workflows" "$QUALIFICATION_ROOT/scripts"
+mkdir -p "$QUALIFICATION_ROOT/config" "$QUALIFICATION_ROOT/.github/workflows" \
+    "$QUALIFICATION_ROOT/scripts/lib"
 git -C "$QUALIFICATION_ROOT" init -q
 printf 'schema_version: 2\n' >"$QUALIFICATION_ROOT/acfs.manifest.yaml"
 printf '0.8.0\n' >"$QUALIFICATION_ROOT/VERSION"
@@ -127,12 +302,32 @@ cp "$REPO_ROOT/config/flywheel-lima.yaml" \
 cp "$REPO_ROOT/flywheel" "$QUALIFICATION_ROOT/flywheel"
 cp "$REPO_ROOT/scripts/flywheel-repository-control.py" \
     "$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py"
+cp "$REPO_ROOT/scripts/lib/contract.sh" \
+    "$QUALIFICATION_ROOT/scripts/lib/contract.sh"
+cp "$REPO_ROOT/install.sh" "$QUALIFICATION_ROOT/install.sh"
+for guest_entrypoint in \
+    flywheel-mac-install-guest.sh \
+    flywheel-ensure-swap.sh \
+    flywheel-qualification-host.sh \
+    flywheel-partial-safe-doctor.sh; do
+    cp "$REPO_ROOT/scripts/$guest_entrypoint" \
+        "$QUALIFICATION_ROOT/scripts/$guest_entrypoint"
+done
 git -C "$QUALIFICATION_ROOT" add \
-    acfs.manifest.yaml VERSION AGENTS.md flywheel .github/workflows/test.yml \
+    acfs.manifest.yaml VERSION AGENTS.md flywheel install.sh \
+    .github/workflows/test.yml \
     config/flywheel-partial-safe-allowlist.json config/flywheel-lima.yaml \
-    scripts/flywheel-repository-control.py
+    scripts/flywheel-repository-control.py \
+    scripts/lib/contract.sh \
+    scripts/flywheel-mac-install-guest.sh \
+    scripts/flywheel-ensure-swap.sh \
+    scripts/flywheel-qualification-host.sh \
+    scripts/flywheel-partial-safe-doctor.sh
 git -C "$QUALIFICATION_ROOT" -c user.name=Flywheel -c user.email=flywheel.invalid@example.test \
     commit -qm initial
+GUEST_ROOT="$TEST_ROOT/existing-guest-source"
+git clone -q "$QUALIFICATION_ROOT" "$GUEST_ROOT"
+export FLYWHEEL_TEST_GUEST_ROOT="$GUEST_ROOT"
 printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$TEST_ROOT/os-release"
 printf 'MemTotal: 10485760 kB\nSwapTotal: 8388608 kB\n' >"$TEST_ROOT/meminfo"
 git -C "$QUALIFICATION_ROOT" bundle create "$TEST_ROOT/qualification-source.bundle" HEAD
@@ -158,7 +353,7 @@ qualification_json="$(
     FLYWHEEL_MEMINFO_FILE="$TEST_ROOT/meminfo" \
     FLYWHEEL_BASH_MAJOR=5 \
     FLYWHEEL_BASH_VERSION=5.2.0 \
-    "$REPO_ROOT/scripts/flywheel-qualification-host.sh" --json
+    "$QUALIFICATION_ROOT/scripts/flywheel-qualification-host.sh" --json
 )"
 python3 -c '
 import json,sys
@@ -190,6 +385,95 @@ cmp -s "$QUALIFICATION_ROOT/flywheel" "$TEST_ROOT/home/.local/bin/flywheel"
 # tried to install itself onto itself and failed after the guest had succeeded.
 HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" mac install --quiet
 cmp -s "$QUALIFICATION_ROOT/flywheel" "$TEST_ROOT/home/.local/bin/flywheel"
+
+# Bytes copied after the long guest convergence come from the selected commit,
+# not mutable worktree paths that may drift after preflight.
+export FLYWHEEL_TEST_POST_HEAVY_MUTATE_ROOT="$QUALIFICATION_ROOT"
+HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" mac install --quiet
+unset FLYWHEEL_TEST_POST_HEAVY_MUTATE_ROOT
+git -C "$QUALIFICATION_ROOT" show HEAD:flywheel >"$TEST_ROOT/committed-flywheel"
+cmp -s "$TEST_ROOT/committed-flywheel" "$TEST_ROOT/home/.local/bin/flywheel"
+/usr/bin/python3 -I - "$FLYWHEEL_STATE_HOME/installation.json" <<'PY'
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["authority"]["sha256"] == "736ce053c42c91b4219cc13dde7a604c33158e1369f3d4d91031672da80f3633"
+PY
+git -C "$QUALIFICATION_ROOT" show HEAD:flywheel >"$QUALIFICATION_ROOT/flywheel"
+chmod 0755 "$QUALIFICATION_ROOT/flywheel"
+git -C "$QUALIFICATION_ROOT" show HEAD:config/flywheel-partial-safe-allowlist.json \
+    >"$QUALIFICATION_ROOT/config/flywheel-partial-safe-allowlist.json"
+chmod 0444 "$QUALIFICATION_ROOT/config/flywheel-partial-safe-allowlist.json"
+
+# Reusing an existing guest checkout must reject index state that hides changed
+# executable bytes. The host source remains clean, so this exercises the guest
+# boundary rather than the host preflight.
+git -C "$GUEST_ROOT" update-index --assume-unchanged \
+    scripts/flywheel-mac-install-guest.sh
+printf '\nprintf "hidden guest installer executed\\n" >&2\n' \
+    >>"$GUEST_ROOT/scripts/flywheel-mac-install-guest.sh"
+: >"$CALLS"
+hidden_guest_rc=0
+HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" mac install --quiet \
+    >"$TEST_ROOT/hidden-guest-install.out" 2>&1 || hidden_guest_rc=$?
+[[ "$hidden_guest_rc" -ne 0 ]]
+grep -F -- 'flywheel-verify-exact-guest-source' "$CALLS" >/dev/null
+if grep -F -- 'flywheel-mac-install-guest.sh /opt/agent-flywheel-acfs-' "$CALLS" >/dev/null; then
+    printf 'hidden guest installer unexpectedly reached execution\n' >&2
+    exit 1
+fi
+git -C "$GUEST_ROOT" update-index --no-assume-unchanged \
+    scripts/flywheel-mac-install-guest.sh
+git -C "$GUEST_ROOT" show HEAD:scripts/flywheel-mac-install-guest.sh \
+    >"$GUEST_ROOT/scripts/flywheel-mac-install-guest.sh"
+
+# Repository-local Git filters cannot execute or normalize a modified sourced
+# dependency during the guest exact-source check.
+GUEST_FILTER_SENTINEL="$TEST_ROOT/guest-filter-ran"
+GUEST_PROCESS_SENTINEL="$TEST_ROOT/guest-filter-process-ran"
+GUEST_DIFF_SENTINEL="$TEST_ROOT/guest-diff-driver-ran"
+cat >"$TEST_ROOT/guest-filter" <<SH
+#!/bin/sh
+printf 'ran\n' >'$GUEST_FILTER_SENTINEL'
+cat
+SH
+cat >"$TEST_ROOT/guest-process" <<SH
+#!/bin/sh
+printf 'ran\n' >'$GUEST_PROCESS_SENTINEL'
+exit 1
+SH
+cat >"$TEST_ROOT/guest-diff" <<SH
+#!/bin/sh
+printf 'ran\n' >'$GUEST_DIFF_SENTINEL'
+exit 0
+SH
+chmod 0755 "$TEST_ROOT/guest-filter" "$TEST_ROOT/guest-process" "$TEST_ROOT/guest-diff"
+printf 'scripts/lib/contract.sh filter=poison diff=poison\n' >"$GUEST_ROOT/.git/info/attributes"
+git -C "$GUEST_ROOT" config filter.poison.clean "$TEST_ROOT/guest-filter"
+git -C "$GUEST_ROOT" config filter.poison.process "$TEST_ROOT/guest-process"
+git -C "$GUEST_ROOT" config diff.poison.command "$TEST_ROOT/guest-diff"
+git -C "$GUEST_ROOT" config diff.poison.textconv "$TEST_ROOT/guest-diff"
+printf '# concealed guest contract drift\n' >>"$GUEST_ROOT/scripts/lib/contract.sh"
+: >"$CALLS"
+filtered_guest_rc=0
+HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" mac install --quiet \
+    >"$TEST_ROOT/filtered-guest-install.out" 2>&1 || filtered_guest_rc=$?
+[[ "$filtered_guest_rc" -ne 0 ]]
+[[ ! -e "$GUEST_FILTER_SENTINEL" ]]
+[[ ! -e "$GUEST_PROCESS_SENTINEL" ]]
+[[ ! -e "$GUEST_DIFF_SENTINEL" ]]
+if grep -F -- 'flywheel-mac-install-guest.sh /opt/agent-flywheel-acfs-' "$CALLS" >/dev/null; then
+    printf 'filtered guest dependency unexpectedly reached installation\n' >&2
+    exit 1
+fi
+git -C "$GUEST_ROOT" show HEAD:scripts/lib/contract.sh >"$GUEST_ROOT/scripts/lib/contract.sh"
+: >"$GUEST_ROOT/.git/info/attributes"
+git -C "$GUEST_ROOT" config --unset-all filter.poison.clean
+git -C "$GUEST_ROOT" config --unset-all filter.poison.process
+git -C "$GUEST_ROOT" config --unset-all diff.poison.command
+git -C "$GUEST_ROOT" config --unset-all diff.poison.textconv
+
 python3 - "$FLYWHEEL_STATE_HOME/installation.json" "$QUALIFICATION_ROOT" <<'PY'
 import hashlib
 import json
@@ -285,6 +569,91 @@ running_text="$("$REPO_ROOT/flywheel" status)"
 [[ "$running_text" == *'Repository rollout: not_connected'* ]]
 [[ "$running_text" == *'Blocker [repository_rollout]: receipt_not_connected'* ]]
 
+# Fresh qualification and doctor receipts are accepted only when their exact
+# schema, digest, installed source/bundle/claim, rows, and summaries agree.
+for mutation in wrong-schema extra-field wrong-source wrong-bundle inconsistent-summary bad-digest; do
+    export FLYWHEEL_TEST_QUALIFICATION_MUTATION="$mutation"
+    forged_status_rc=0
+    forged_status_json="$("$REPO_ROOT/flywheel" status --json)" || forged_status_rc=$?
+    [[ "$forged_status_rc" -eq 1 ]]
+    /usr/bin/python3 -I - "$forged_status_json" "$mutation" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+assert value["readiness"] == "attention", (sys.argv[2], value)
+assert value["qualification"]["status"] == "invalid", (sys.argv[2], value)
+assert value["doctor"]["status"] == "pass", (sys.argv[2], value)
+PY
+    unset FLYWHEEL_TEST_QUALIFICATION_MUTATION
+done
+for mutation in wrong-schema extra-field wrong-claim wrong-source wrong-authority inconsistent-summary bad-digest; do
+    export FLYWHEEL_TEST_DOCTOR_MUTATION="$mutation"
+    forged_status_rc=0
+    forged_status_json="$("$REPO_ROOT/flywheel" status --json)" || forged_status_rc=$?
+    [[ "$forged_status_rc" -eq 1 ]]
+    /usr/bin/python3 -I - "$forged_status_json" "$mutation" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+assert value["readiness"] == "attention", (sys.argv[2], value)
+assert value["qualification"]["status"] == "pass", (sys.argv[2], value)
+assert value["doctor"]["status"] == "invalid", (sys.argv[2], value)
+PY
+    unset FLYWHEEL_TEST_DOCTOR_MUTATION
+done
+grep -F -- '/bin/bash -p /opt/agent-flywheel-acfs-' "$CALLS" >/dev/null
+if grep -E -- '(^|[[:space:]])bash -p /opt/agent-flywheel-acfs-' "$CALLS" >/dev/null; then
+    printf 'guest entrypoint was launched through PATH instead of /bin/bash\n' >&2
+    exit 1
+fi
+
+# Qualification and doctor each repeat the exact guest-source check immediately
+# before invoking their committed entrypoint.
+git -C "$GUEST_ROOT" update-index --assume-unchanged \
+    scripts/flywheel-qualification-host.sh
+printf '\nprintf "hidden qualification executed\\n" >&2\n' \
+    >>"$GUEST_ROOT/scripts/flywheel-qualification-host.sh"
+: >"$CALLS"
+hidden_qualification_status_rc=0
+hidden_qualification_status_json="$("$REPO_ROOT/flywheel" status --json)" \
+    || hidden_qualification_status_rc=$?
+[[ "$hidden_qualification_status_rc" -eq 1 ]]
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["qualification"]["status"] == "not_run"
+assert value["doctor"]["status"] == "not_run"
+' "$hidden_qualification_status_json"
+if grep -F -- '/scripts/flywheel-qualification-host.sh' "$CALLS" >/dev/null \
+    || grep -F -- '/scripts/flywheel-partial-safe-doctor.sh' "$CALLS" >/dev/null; then
+    printf 'hidden guest qualification unexpectedly reached execution\n' >&2
+    exit 1
+fi
+git -C "$GUEST_ROOT" update-index --no-assume-unchanged \
+    scripts/flywheel-qualification-host.sh
+git -C "$GUEST_ROOT" show HEAD:scripts/flywheel-qualification-host.sh \
+    >"$GUEST_ROOT/scripts/flywheel-qualification-host.sh"
+
+git -C "$GUEST_ROOT" update-index --skip-worktree \
+    scripts/flywheel-partial-safe-doctor.sh
+printf '\nprintf "hidden doctor executed\\n" >&2\n' \
+    >>"$GUEST_ROOT/scripts/flywheel-partial-safe-doctor.sh"
+: >"$CALLS"
+hidden_doctor_rc=0
+"$REPO_ROOT/flywheel" doctor --json \
+    >"$TEST_ROOT/hidden-guest-doctor.out" 2>&1 || hidden_doctor_rc=$?
+[[ "$hidden_doctor_rc" -ne 0 ]]
+if grep -F -- '/scripts/flywheel-partial-safe-doctor.sh' "$CALLS" >/dev/null; then
+    printf 'hidden guest doctor unexpectedly reached execution\n' >&2
+    exit 1
+fi
+git -C "$GUEST_ROOT" update-index --no-skip-worktree \
+    scripts/flywheel-partial-safe-doctor.sh
+git -C "$GUEST_ROOT" show HEAD:scripts/flywheel-partial-safe-doctor.sh \
+    >"$GUEST_ROOT/scripts/flywheel-partial-safe-doctor.sh"
+
 # Every mutating lifecycle command, including stop, shares one kernel-held
 # lock. Contenders cannot steal it while the current owner is paused in Lima.
 STOP_ENTERED_FILE="$TEST_ROOT/stop-entered"
@@ -345,6 +714,51 @@ done
 : >"$STOP_RELEASE_FILE"
 wait "$stop_holder_pid"
 [[ "$(<"$STATUS_FILE")" == "Stopped" ]]
+unset FLYWHEEL_TEST_STOP_ENTERED_FILE FLYWHEEL_TEST_STOP_RELEASE_FILE
+
+# Class-7 multi-process TOCTOU regression, stressed ten times. T1 owns the
+# kernel lock and is blocked inside the real stop path. TERM must not clean up
+# and return; while T1 is still alive, T2 must observe conflict and must not
+# enter the mutating Lima stop. Only T1's eventual process exit releases it.
+signal_round=1
+while ((signal_round <= 10)); do
+    SIGNAL_STOP_ENTERED_FILE="$TEST_ROOT/signal-stop-entered-$signal_round"
+    SIGNAL_STOP_RELEASE_FILE="$TEST_ROOT/signal-stop-release-$signal_round"
+    export FLYWHEEL_TEST_STOP_ENTERED_FILE="$SIGNAL_STOP_ENTERED_FILE"
+    export FLYWHEEL_TEST_STOP_RELEASE_FILE="$SIGNAL_STOP_RELEASE_FILE"
+    : >"$CALLS"
+    printf 'Running\n' >"$STATUS_FILE"
+    "$REPO_ROOT/flywheel" stop --quiet \
+        >"$TEST_ROOT/signal-holder-$signal_round.out" 2>&1 &
+    signal_holder_pid=$!
+    attempts=0
+    while [[ ! -e "$SIGNAL_STOP_ENTERED_FILE" ]]; do
+        attempts=$((attempts + 1))
+        ((attempts < 100)) || {
+            printf 'signal holder did not enter mocked Lima stop in round %s\n' \
+                "$signal_round" >&2
+            exit 1
+        }
+        sleep 0.05
+    done
+
+    kill -TERM "$signal_holder_pid"
+    kill -0 "$signal_holder_pid" 2>/dev/null
+    signal_contender_rc=0
+    "$REPO_ROOT/flywheel" stop --quiet \
+        >"$TEST_ROOT/signal-contender-$signal_round.out" 2>&1 \
+        || signal_contender_rc=$?
+    [[ "$signal_contender_rc" -eq 5 ]]
+    [[ "$(grep -c '^stop agent-flywheel-ubuntu2404$' "$CALLS")" -eq 1 ]]
+    [[ "$(<"$STATUS_FILE")" == "Running" ]]
+
+    : >"$SIGNAL_STOP_RELEASE_FILE"
+    signal_holder_rc=0
+    wait "$signal_holder_pid" || signal_holder_rc=$?
+    [[ "$signal_holder_rc" -eq 143 ]]
+    [[ "$(<"$STATUS_FILE")" == "Stopped" ]]
+    signal_round=$((signal_round + 1))
+done
 unset FLYWHEEL_TEST_STOP_ENTERED_FILE FLYWHEEL_TEST_STOP_RELEASE_FILE
 
 # PID-shaped stale metadata has no ownership authority. Only the kernel flock
@@ -568,10 +982,63 @@ printf '{}\n'
 SH
 chmod 0755 "$TEST_ROOT/fsmonitor-hook"
 export FLYWHEEL_TEST_FSMONITOR_MARKER="$TEST_ROOT/fsmonitor-ran"
+
+# Host Git probes are hermetic even when the caller injects repository,
+# alternate-index, configuration-count, object-store, and trace variables.
+ambient_inspection_json="$(
+    GIT_DIR="$TEST_ROOT/ambient-git-dir" \
+    GIT_WORK_TREE="$TEST_ROOT/ambient-work-tree" \
+    GIT_INDEX_FILE="$TEST_ROOT/ambient-index" \
+    GIT_OBJECT_DIRECTORY="$TEST_ROOT/ambient-objects" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES="$TEST_ROOT/ambient-alternates" \
+    GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=core.fsmonitor \
+    GIT_CONFIG_VALUE_0="$TEST_ROOT/fsmonitor-hook" \
+    GIT_TRACE="$TEST_ROOT/ambient-git-trace" \
+    "$REPO_ROOT/flywheel" repository inspect "$QUALIFICATION_ROOT" --json
+)"
+[[ "$ambient_inspection_json" == "$inspection_json" ]]
+[[ ! -e "$FLYWHEEL_TEST_FSMONITOR_MARKER" ]]
+[[ ! -e "$TEST_ROOT/ambient-git-trace" ]]
+
 git -C "$QUALIFICATION_ROOT" config core.fsmonitor "$TEST_ROOT/fsmonitor-hook"
 "$REPO_ROOT/flywheel" repository inspect "$QUALIFICATION_ROOT" --json >/dev/null
 [[ ! -e "$FLYWHEEL_TEST_FSMONITOR_MARKER" ]]
 git -C "$QUALIFICATION_ROOT" config --unset core.fsmonitor
+
+# Direct repository and rollout commands never import working-tree validator
+# bytes. Hidden and ordinary validator drift both fail before Python executes.
+export FLYWHEEL_TEST_DIRECT_VALIDATOR_MARKER="$TEST_ROOT/direct-validator-ran"
+git -C "$QUALIFICATION_ROOT" update-index --assume-unchanged \
+    scripts/flywheel-repository-control.py
+cat >>"$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py" <<'PY'
+with open(os.environ["FLYWHEEL_TEST_DIRECT_VALIDATOR_MARKER"], "w", encoding="utf-8") as handle:
+    handle.write("unsafe")
+PY
+hidden_direct_rc=0
+hidden_direct_error="$("$REPO_ROOT/flywheel" repository inspect \
+    "$QUALIFICATION_ROOT" --json 2>&1)" || hidden_direct_rc=$?
+[[ "$hidden_direct_rc" -eq 2 ]]
+[[ "$hidden_direct_error" == *'unsafe assume-unchanged, skip-worktree, or unmerged index flags'* ]]
+[[ ! -e "$FLYWHEEL_TEST_DIRECT_VALIDATOR_MARKER" ]]
+git -C "$QUALIFICATION_ROOT" update-index --no-assume-unchanged \
+    scripts/flywheel-repository-control.py
+git -C "$QUALIFICATION_ROOT" show HEAD:scripts/flywheel-repository-control.py \
+    >"$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py"
+
+cat >>"$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py" <<'PY'
+with open(os.environ["FLYWHEEL_TEST_DIRECT_VALIDATOR_MARKER"], "w", encoding="utf-8") as handle:
+    handle.write("unsafe")
+PY
+mutable_direct_rc=0
+mutable_direct_error="$("$REPO_ROOT/flywheel" rollout plan \
+    "$TEST_ROOT/not-read-while-validator-is-mutable.json" --json 2>&1)" \
+    || mutable_direct_rc=$?
+[[ "$mutable_direct_rc" -eq 2 ]]
+[[ "$mutable_direct_error" == *'ACFS source checkout has uncommitted changes'* ]]
+[[ ! -e "$FLYWHEEL_TEST_DIRECT_VALIDATOR_MARKER" ]]
+git -C "$QUALIFICATION_ROOT" show HEAD:scripts/flywheel-repository-control.py \
+    >"$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py"
 
 # Isolated Python execution prevents current-directory module shadowing.
 mkdir -p "$TEST_ROOT/import-trap"
@@ -1007,15 +1474,15 @@ drifted_validator_status="$("$REPO_ROOT/flywheel" status --json \
 python3 -c '
 import json,sys
 value=json.loads(sys.argv[1])
-assert value["source"]["clean"] is True
-assert value["source"]["matches_installation"] is False
-assert value["repository_rollout"]["status"] == "invalid"
-assert "requires the clean exact source recorded by the installation receipt" in value["repository_rollout"]["error"]
+assert value["source"]["clean"] is True, value
+assert value["source"]["matches_installation"] is False, value
+assert value["repository_rollout"]["status"] == "invalid", value
+assert "requires the clean exact source recorded by the installation receipt" in value["repository_rollout"]["error"], value
 ' "$drifted_validator_status"
 
-# An advanced clean checkout, even one whose authority selection differs, is
-# diagnostic only for lifecycle health. Installed work stays bound to the
-# self-contained receipt's exact guest source and authority.
+# An advanced clean checkout whose authority differs from the installation is
+# a lifecycle blocker while that checkout is present. Installed work remains
+# bound to its receipt, but the mismatch cannot be reported as ready.
 RECORDED_HEAD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"]["head"])' \
     "$FLYWHEEL_STATE_HOME/installation.json")"
 RECORDED_GUEST_ROOT="/opt/agent-flywheel-acfs-$RECORDED_HEAD"
@@ -1025,18 +1492,22 @@ git -C "$QUALIFICATION_ROOT" add config/flywheel-license-clearance.json
 git -C "$QUALIFICATION_ROOT" -c user.name=Flywheel -c user.email=flywheel.invalid@example.test \
     commit -qm advanced-checkout-authority
 : >"$CALLS"
-advanced_status_json="$(HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" status --json)"
+advanced_status_rc=0
+advanced_status_json="$(HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" status --json)" \
+    || advanced_status_rc=$?
+[[ "$advanced_status_rc" -eq 1 ]]
 python3 -c '
 import json,sys
 value=json.loads(sys.argv[1])
-assert value["readiness"] == "ready"
+assert value["readiness"] == "attention"
 assert value["installation"]["status"] == "recorded"
+assert value["installation"]["matches_current_authority"] is False
 assert value["source"]["clean"] is True
 assert value["source"]["matches_installation"] is False
 assert value["installed_source"]["head"] == sys.argv[2]
 assert value["qualification"]["status"] == "pass"
 assert value["doctor"]["status"] == "pass"
-assert [item["code"] for item in value["blockers"]] == ["receipt_not_connected"]
+assert [item["code"] for item in value["blockers"]] == ["current_authority_mismatch", "receipt_not_connected"]
 ' "$advanced_status_json" "$RECORDED_HEAD"
 HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" doctor --json >/dev/null
 grep -F -- "$RECORDED_GUEST_ROOT/scripts/flywheel-qualification-host.sh" "$CALLS" >/dev/null
@@ -1053,15 +1524,18 @@ RETAINED_DELETED_ROOT="$TEST_ROOT/qualification-source-retained"
 mv "$QUALIFICATION_ROOT" "$MOVED_QUALIFICATION_ROOT"
 printf '%s\n' "$MOVED_QUALIFICATION_ROOT" >"$FLYWHEEL_STATE_HOME/source-root"
 unset FLYWHEEL_SOURCE_REPO
-moved_status_json="$(HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" status --json)"
+moved_status_rc=0
+moved_status_json="$(HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" status --json)" \
+    || moved_status_rc=$?
+[[ "$moved_status_rc" -eq 1 ]]
 python3 -c '
 import json,sys
 value=json.loads(sys.argv[1])
-assert value["readiness"] == "ready"
+assert value["readiness"] == "attention"
 assert value["source"]["root"].endswith("qualification-source-moved")
 assert value["source"]["matches_installation"] is False
 assert value["installed_source"]["head"] == sys.argv[2]
-assert [item["code"] for item in value["blockers"]] == ["receipt_not_connected"]
+assert [item["code"] for item in value["blockers"]] == ["current_authority_mismatch", "receipt_not_connected"]
 ' "$moved_status_json" "$RECORDED_HEAD"
 HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" doctor --json >/dev/null
 
@@ -1138,6 +1612,52 @@ typo_rc=0
 typo_error="$("$REPO_ROOT/flywheel" statsu 2>&1)" || typo_rc=$?
 [[ "$typo_rc" -eq 2 ]]
 [[ "$typo_error" == *'did you mean: flywheel status --json'* ]]
+
+# A recomputed self-hash does not make user-edited module or authority claims
+# authoritative. Every semantic field remains bound to the compiled authority.
+SEMANTIC_VALID_RECEIPT="$TEST_ROOT/installation-semantic-valid.json"
+cp "$FLYWHEEL_STATE_HOME/installation.json" "$SEMANTIC_VALID_RECEIPT"
+for mutation in authority-sha claim approved-ids independent-holds licensing-cleared licensing-pending; do
+    /usr/bin/python3 -I - "$SEMANTIC_VALID_RECEIPT" "$FLYWHEEL_STATE_HOME/installation.json" "$mutation" <<'PY'
+import hashlib
+import json
+import sys
+
+source_path, destination_path, mutation = sys.argv[1:]
+value = json.load(open(source_path, encoding="utf-8"))
+if mutation == "authority-sha":
+    value["authority"]["sha256"] = "0" * 64
+elif mutation == "claim":
+    value["claim"] = "LICENSE_CLEARED_PARTIAL"
+elif mutation == "approved-ids":
+    value["modules"]["approved_ids"].append("stack.forged")
+    value["modules"]["approved"] += 1
+elif mutation == "independent-holds":
+    value["modules"]["independent_holds"].append("stack.forged_hold")
+elif mutation == "licensing-cleared":
+    value["modules"]["licensing_cleared"] = 1
+elif mutation == "licensing-pending":
+    value["modules"]["licensing_pending"] = 26
+value.pop("receipt_sha256", None)
+canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
+value["receipt_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
+with open(destination_path, "w", encoding="utf-8") as handle:
+    json.dump(value, handle, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    handle.write("\n")
+PY
+    semantic_status_rc=0
+    semantic_status_json="$("$REPO_ROOT/flywheel" status --json)" || semantic_status_rc=$?
+    [[ "$semantic_status_rc" -eq 1 ]]
+    /usr/bin/python3 -I - "$semantic_status_json" "$mutation" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+assert value["installation"]["status"] == "receipt_invalid", (sys.argv[2], value)
+assert any(item["code"] == "installation_receipt_invalid" for item in value["blockers"])
+PY
+done
+cp "$SEMANTIC_VALID_RECEIPT" "$FLYWHEEL_STATE_HOME/installation.json"
 
 python3 - "$FLYWHEEL_STATE_HOME/installation.json" <<'PY'
 import json
