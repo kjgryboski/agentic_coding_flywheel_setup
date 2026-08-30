@@ -8,7 +8,7 @@ launch_block="$({
     sed -n '/^set +e$/,/^install_status=\$?$/p' "$GUEST_INSTALLER"
 } 2>/dev/null)"
 
-[[ "$launch_block" == *'/usr/bin/setsid --wait env'* ]]
+[[ "$launch_block" == *'/usr/bin/setsid --wait /usr/bin/env -i'* ]]
 [[ "$launch_block" == *$'        --yes \\'* ]]
 [[ "$launch_block" == *'"${install_args[@]}" </dev/null >"$INSTALL_LOG" 2>&1'* ]]
 [[ "$launch_block" == *$'install_status=$?'* ]]
@@ -35,7 +35,7 @@ if [[ "$(uname -s)" == "Linux" ]]; then
     set +e
     pty_output="$(
         script -qec \
-            "/usr/bin/setsid --wait env bash -c '[[ ! -t 0 ]] || exit 90; if exec 3<>/dev/tty 2>/dev/null; then exit 91; fi; printf detached; exit 23' </dev/null" \
+            "/usr/bin/setsid --wait /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -c '[[ ! -t 0 ]] || exit 90; if exec 3<>/dev/tty 2>/dev/null; then exit 91; fi; printf detached; exit 23' </dev/null" \
             /dev/null 2>&1
     )"
     launch_status=$?

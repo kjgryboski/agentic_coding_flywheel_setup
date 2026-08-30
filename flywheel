@@ -1,9 +1,14 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 shopt -s lastpipe 2>/dev/null || true
 umask 022
 
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/${BASH_SOURCE[0]##*/}"
+# Host lifecycle decisions and publication must never resolve utilities from an
+# inherited PATH. Third-party entrypoints are selected below by absolute path.
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+SELF="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd -P)/${BASH_SOURCE[0]##*/}"
 STATE_HOME="${FLYWHEEL_STATE_HOME:-$HOME/.local/share/agent-flywheel}"
 SOURCE_POINTER="$STATE_HOME/source-root"
 INSTALL_RECEIPT="$STATE_HOME/installation.json"
@@ -11,7 +16,24 @@ VM_NAME="${FLYWHEEL_VM_NAME:-agent-flywheel-ubuntu2404}"
 CANONICAL_VM_NAME="agent-flywheel-ubuntu2404"
 VM_TEMPLATE_RELATIVE="config/flywheel-lima.yaml"
 HEAVY_RUN="${FLYWHEEL_HEAVY_RUN:-$HOME/.local/bin/codex-heavy-run}"
-LIMACTL="${FLYWHEEL_LIMACTL:-$(command -v limactl 2>/dev/null || true)}"
+if [[ -n "${FLYWHEEL_LIMACTL:-}" ]]; then
+    LIMACTL="$FLYWHEEL_LIMACTL"
+elif [[ -x "$HOME/.local/bin/limactl" ]]; then
+    LIMACTL="$HOME/.local/bin/limactl"
+elif [[ -x /opt/homebrew/bin/limactl ]]; then
+    LIMACTL=/opt/homebrew/bin/limactl
+elif [[ -x /usr/local/bin/limactl ]]; then
+    LIMACTL=/usr/local/bin/limactl
+else
+    LIMACTL=""
+fi
+if [[ -x /opt/homebrew/bin/gum ]]; then
+    GUM=/opt/homebrew/bin/gum
+elif [[ -x /usr/local/bin/gum ]]; then
+    GUM=/usr/local/bin/gum
+else
+    GUM=""
+fi
 ROLLOUT_RECEIPT="${FLYWHEEL_ROLLOUT_RECEIPT:-}"
 PILOT_RECEIPT=""
 PILOT_SOURCE=""
@@ -34,10 +56,24 @@ cleanup() {
         LOCK_HELPER_PID=""
     fi
     if [[ -n "$TEMP_ROOT" && -d "$TEMP_ROOT" ]]; then
-        rm -rf -- "$TEMP_ROOT"
+        /bin/rm -rf -- "$TEMP_ROOT"
     fi
 }
-trap cleanup EXIT INT TERM HUP
+
+terminate_from_signal() {
+    local signal_name="$1"
+    local signal_status="$2"
+    # SAFETY: EXIT is the only lock-cleanup boundary. A signal handler must
+    # terminate T1 instead of closing the FIFO and returning while T1 can still
+    # mutate; otherwise T2 can acquire the released kernel flock concurrently.
+    trap - "$signal_name"
+    exit "$signal_status"
+}
+
+trap cleanup EXIT
+trap 'terminate_from_signal HUP 129' HUP
+trap 'terminate_from_signal INT 130' INT
+trap 'terminate_from_signal TERM 143' TERM
 
 usage() {
     cat <<'USAGE'
@@ -79,8 +115,8 @@ USAGE
 
 info() {
     ((QUIET == 1)) && return 0
-    if ((NO_GUM == 0)) && command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
-        gum style --foreground 39 "→ $*"
+    if ((NO_GUM == 0)) && [[ -n "$GUM" && -x "$GUM" && -t 1 ]]; then
+        "$GUM" style --foreground 39 "→ $*"
     else
         printf '→ %s\n' "$*"
     fi
@@ -88,8 +124,8 @@ info() {
 
 ok() {
     ((QUIET == 1)) && return 0
-    if ((NO_GUM == 0)) && command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
-        gum style --foreground 42 "✓ $*"
+    if ((NO_GUM == 0)) && [[ -n "$GUM" && -x "$GUM" && -t 1 ]]; then
+        "$GUM" style --foreground 42 "✓ $*"
     else
         printf '✓ %s\n' "$*"
     fi
@@ -103,12 +139,22 @@ die() {
 }
 
 safe_git() {
-    GIT_CONFIG_GLOBAL=/dev/null \
-    GIT_CONFIG_SYSTEM=/dev/null \
-    GIT_NO_REPLACE_OBJECTS=1 \
-    GIT_OPTIONAL_LOCKS=0 \
-    GIT_TERMINAL_PROMPT=0 \
-    command git \
+    /usr/bin/env -i \
+        HOME="$HOME" \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        TMPDIR="${TMPDIR:-/tmp}" \
+        LANG=C \
+        LC_ALL=C \
+        GIT_ATTR_NOSYSTEM=1 \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_EXTERNAL_DIFF= \
+        GIT_LITERAL_PATHSPECS=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_TERMINAL_PROMPT=0 \
+        /usr/bin/git \
         -c core.fsmonitor=false \
         -c core.untrackedCache=false \
         -c core.hooksPath=/dev/null \
@@ -117,10 +163,46 @@ safe_git() {
         "$@"
 }
 
+tracked_regular_files_match_head() {
+    local root="$1"
+    local head="$2"
+    local entry=""
+    local metadata=""
+    local mode=""
+    local object_type=""
+    local object_id=""
+    local relative_path=""
+    local regular_count=0
+    [[ "$head" =~ ^[0-9a-f]{40}$ ]] || return 1
+    while IFS= read -r -d '' entry; do
+        [[ "$entry" == *$'\t'* ]] || return 1
+        metadata="${entry%%$'\t'*}"
+        relative_path="${entry#*$'\t'}"
+        read -r mode object_type object_id <<<"$metadata"
+        [[ "$relative_path" != /* \
+            && "$relative_path" != ".." \
+            && "$relative_path" != ../* \
+            && "$relative_path" != */../* \
+            && "$relative_path" != */.. ]] || return 1
+        case "$mode" in
+            100644|100755)
+                [[ "$object_type" == "blob" && "$object_id" =~ ^[0-9a-f]{40}$ \
+                    && -f "$root/$relative_path" && ! -L "$root/$relative_path" ]] \
+                    || return 1
+                safe_git -C "$root" cat-file blob "$object_id" \
+                    | /usr/bin/cmp -s - "$root/$relative_path" \
+                    || return 1
+                regular_count=$((regular_count + 1))
+                ;;
+        esac
+    done < <(safe_git -C "$root" ls-tree -r -z --full-tree "$head")
+    ((regular_count > 0))
+}
+
 git_index_flags_safe() {
     local root="$1"
     safe_git -C "$root" ls-files -v -z --cached \
-        | python3 -I -c '
+        | /usr/bin/python3 -I -c '
 import sys
 records = [item for item in sys.stdin.buffer.read().split(b"\0") if item]
 raise SystemExit(0 if all(len(item) >= 3 and item[0:1] == b"H" and item[1:2] == b" " for item in records) else 1)
@@ -129,13 +211,13 @@ raise SystemExit(0 if all(len(item) >= 3 and item[0:1] == b"H" and item[1:2] == 
 
 ensure_temp_root() {
     if [[ -z "$TEMP_ROOT" ]]; then
-        TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flywheel.XXXXXXXX")"
-        chmod 0700 "$TEMP_ROOT"
+        TEMP_ROOT="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/flywheel.XXXXXXXX")"
+        /bin/chmod 0700 "$TEMP_ROOT"
     fi
 }
 
 read_source_pointer() {
-    python3 -I - "$SOURCE_POINTER" <<'PY'
+    /usr/bin/python3 -I - "$SOURCE_POINTER" <<'PY'
 import os
 import stat
 import sys
@@ -189,16 +271,16 @@ source_root() {
 }
 
 require_mac_tools() {
-    [[ "$(uname -s)" == "Darwin" ]] \
+    [[ "$(/usr/bin/uname -s)" == "Darwin" ]] \
         || die 3 "Mac lifecycle commands require macOS"
-    [[ -n "$LIMACTL" && -x "$LIMACTL" ]] \
+    [[ -n "$LIMACTL" && "$LIMACTL" == /* && -x "$LIMACTL" && ! -d "$LIMACTL" ]] \
         || die 3 "Lima is required; install it, then retry the same command"
 }
 
 vm_probe() {
     local inventory=""
     if ! inventory="$("$LIMACTL" list --json 2>/dev/null)"; then
-        python3 -I - "$VM_NAME" "$CANONICAL_VM_NAME" <<'PY'
+        /usr/bin/python3 -I - "$VM_NAME" "$CANONICAL_VM_NAME" <<'PY'
 import json
 import sys
 
@@ -218,7 +300,7 @@ print(json.dumps({
 PY
         return 0
     fi
-    python3 -I - "$VM_NAME" "$CANONICAL_VM_NAME" "$inventory" <<'PY'
+    /usr/bin/python3 -I - "$VM_NAME" "$CANONICAL_VM_NAME" "$inventory" <<'PY'
 import json
 import sys
 
@@ -347,7 +429,7 @@ PY
 }
 
 probe_value() {
-    python3 -I -c 'import json,sys; value=json.loads(sys.argv[1]); result=value'"$2"'; print(json.dumps(result) if isinstance(result, (dict, list, bool)) or result is None else result)' "$1"
+    /usr/bin/python3 -I -c 'import json,sys; value=json.loads(sys.argv[1]); result=value'"$2"'; print(json.dumps(result) if isinstance(result, (dict, list, bool)) or result is None else result)' "$1"
 }
 
 ensure_running() {
@@ -359,6 +441,7 @@ ensure_running() {
     local mismatches=""
     local root=""
     local template=""
+    local template_head=""
     [[ "$VM_NAME" == "$CANONICAL_VM_NAME" ]] \
         || die 2 "unsupported VM name $VM_NAME; the Mac lifecycle contract requires $CANONICAL_VM_NAME"
     probe="$(vm_probe)"
@@ -380,9 +463,12 @@ ensure_running() {
             || die 2 "the canonical Lima template is not tracked by the exact source checkout; no VM was created"
         git_index_flags_safe "$root" \
             || die 2 "the source checkout has unsafe index flags; no VM was created"
-        safe_git -C "$root" diff --no-ext-diff --quiet -- "$VM_TEMPLATE_RELATIVE" \
-            && safe_git -C "$root" diff --no-ext-diff --cached --quiet -- "$VM_TEMPLATE_RELATIVE" \
-            || die 2 "the canonical Lima template has uncommitted drift; no VM was created"
+        template_head="$(safe_git -C "$root" rev-parse --verify HEAD)"
+        safe_git -C "$root" show "$template_head:$VM_TEMPLATE_RELATIVE" \
+            | /usr/bin/cmp -s - "$template" \
+            || die 2 "the canonical Lima template bytes differ from the committed source; no VM was created"
+        safe_git -C "$root" diff --cached --quiet --no-ext-diff --no-textconv -- "$VM_TEMPLATE_RELATIVE" \
+            || die 2 "the canonical Lima template has staged drift; no VM was created"
         "$LIMACTL" validate "$template" >/dev/null \
             || die 2 "the canonical Lima template failed validation; no VM was created"
         info "Creating the isolated Ubuntu Flywheel"
@@ -431,28 +517,28 @@ acquire_lifecycle_lock() {
         [[ -d "$STATE_HOME" && ! -L "$STATE_HOME" ]] \
             || die 3 "lifecycle state directory is unavailable or unsafe"
     else
-        mkdir -p "$STATE_HOME"
+        /bin/mkdir -p "$STATE_HOME"
     fi
     if [[ -e "$lock_root" || -L "$lock_root" ]]; then
         [[ -d "$lock_root" && ! -L "$lock_root" ]] \
             || die 3 "lifecycle lock directory is unavailable or unsafe"
     else
-        mkdir "$lock_root"
+        /bin/mkdir "$lock_root"
     fi
-    chmod 0700 "$STATE_HOME" "$lock_root"
+    /bin/chmod 0700 "$STATE_HOME" "$lock_root"
     LOCK_DIR="$lock_root/lifecycle.lock"
-    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    if ! /bin/mkdir "$LOCK_DIR" 2>/dev/null; then
         [[ -d "$LOCK_DIR" && ! -L "$LOCK_DIR" ]] \
             || die 3 "lifecycle lock container is unavailable or unsafe"
     fi
-    chmod 0700 "$LOCK_DIR"
+    /bin/chmod 0700 "$LOCK_DIR"
 
     ensure_temp_root
     control_fifo="$TEMP_ROOT/lifecycle-control"
     result_file="$TEMP_ROOT/lifecycle-lock-result"
     helper_program="$TEMP_ROOT/lifecycle-lock-helper.py"
-    mkfifo -m 0600 "$control_fifo"
-    cat >"$helper_program" <<'PY'
+    /usr/bin/mkfifo -m 0600 "$control_fifo"
+    /bin/cat >"$helper_program" <<'PY'
 import datetime
 import errno
 import fcntl
@@ -522,8 +608,8 @@ finally:
     if descriptor is not None:
         os.close(descriptor)
 PY
-    chmod 0600 "$helper_program"
-    python3 -I "$helper_program" "$LOCK_DIR/owner.lock" "$result_file" "$operation" "$$" \
+    /bin/chmod 0600 "$helper_program"
+    /usr/bin/python3 -I "$helper_program" "$LOCK_DIR/owner.lock" "$result_file" "$operation" "$$" \
         <"$control_fifo" &
     LOCK_HELPER_PID=$!
     exec 9>"$control_fifo"
@@ -534,7 +620,7 @@ PY
         if ((attempts >= 100)); then
             break
         fi
-        sleep 0.05
+        /bin/sleep 0.05
     done
     if [[ -s "$result_file" ]]; then
         IFS= read -r result <"$result_file"
@@ -554,7 +640,7 @@ PY
 }
 
 sha256_file() {
-    shasum -a 256 "$1" | awk '{print $1}'
+    /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
 }
 
 publish_private_file() {
@@ -565,14 +651,123 @@ publish_private_file() {
     local candidate=""
     [[ -d "$parent" && ! -L "$parent" ]] \
         || die 3 "state directory is unavailable or unsafe: $parent"
-    candidate="$(mktemp "$parent/.$name.XXXXXXXX")"
-    install -m 0600 "$source" "$candidate"
-    mv -f "$candidate" "$destination"
+    candidate="$(/usr/bin/mktemp "$parent/.$name.XXXXXXXX")"
+    /usr/bin/install -m 0600 "$source" "$candidate"
+    /bin/mv -f "$candidate" "$destination"
+}
+
+verify_guest_source() {
+    local guest_root="$1"
+    local expected_head="$2"
+    local expected_tree="$3"
+    local verification_status=0
+    [[ "$guest_root" =~ ^/opt/agent-flywheel-acfs-[0-9a-f]{40}$ \
+        && "$expected_head" =~ ^[0-9a-f]{40}$ \
+        && "$expected_tree" =~ ^[0-9a-f]{40}$ \
+        && "$guest_root" == "/opt/agent-flywheel-acfs-$expected_head" ]] \
+        || die 2 "installation receipt contains invalid exact-source bindings"
+    "$LIMACTL" shell "$VM_NAME" -- sudo /bin/bash -s -- \
+        flywheel-verify-exact-guest-source \
+        "$guest_root" "$expected_head" "$expected_tree" <<'SH' \
+        || verification_status=$?
+set -euo pipefail
+[[ "${1:-}" == "flywheel-verify-exact-guest-source" ]]
+shift
+guest_root="$1"
+expected_head="$2"
+expected_tree="$3"
+
+guest_git() {
+    /usr/bin/env -i \
+        HOME=/root \
+        PATH=/usr/bin:/bin \
+        LANG=C \
+        LC_ALL=C \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_ATTR_NOSYSTEM=1 \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_EXTERNAL_DIFF= \
+        GIT_LITERAL_PATHSPECS=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_TERMINAL_PROMPT=0 \
+        /usr/bin/git \
+            -c "safe.directory=$guest_root" \
+            -c core.fsmonitor=false \
+            -c core.untrackedCache=false \
+            -c core.hooksPath=/dev/null \
+            -c diff.external= \
+            -c interactive.diffFilter= \
+            -C "$guest_root" "$@"
+}
+
+[[ -d "$guest_root" && ! -L "$guest_root" \
+    && -d "$guest_root/.git" && ! -L "$guest_root/.git" ]]
+[[ "$(cd "$guest_root" && pwd -P)" == "$guest_root" ]]
+[[ "$(guest_git rev-parse --verify HEAD)" == "$expected_head" ]]
+[[ "$(guest_git rev-parse 'HEAD^{tree}')" == "$expected_tree" ]]
+
+# Every cached path must have the normal H tag. Lowercase assume-unchanged,
+# S skip-worktree/sparse, and unmerged stage tags are all fail-closed.
+guest_git ls-files -v -z --cached | (
+    count=0
+    while IFS= read -r -d '' record; do
+        count=$((count + 1))
+        [[ "${record:0:2}" == "H " ]]
+    done
+    ((count > 0))
+)
+guest_git diff --cached --quiet --no-ext-diff --no-textconv
+[[ -z "$(guest_git ls-files --others --exclude-standard)" ]]
+
+# Compare every tracked regular file to its raw committed blob. Git worktree
+# diff is deliberately not part of this trust boundary: repository-local
+# clean/process filters can execute code and normalize malicious worktree bytes.
+regular_count=0
+while IFS= read -r -d '' entry; do
+    [[ "$entry" == *$'\t'* ]]
+    metadata="${entry%%$'\t'*}"
+    tracked_path="${entry#*$'\t'}"
+    read -r mode object_type object_id <<<"$metadata"
+    [[ "$tracked_path" != /* \
+        && "$tracked_path" != ".." \
+        && "$tracked_path" != ../* \
+        && "$tracked_path" != */../* \
+        && "$tracked_path" != */.. ]]
+    case "$mode" in
+        100644|100755)
+            [[ "$object_type" == "blob" && "$object_id" =~ ^[0-9a-f]{40}$ \
+                && -f "$guest_root/$tracked_path" && ! -L "$guest_root/$tracked_path" ]]
+            guest_git cat-file blob "$object_id" \
+                | /usr/bin/cmp -s - "$guest_root/$tracked_path"
+            regular_count=$((regular_count + 1))
+            ;;
+    esac
+done < <(guest_git ls-tree -r -z --full-tree "$expected_head")
+((regular_count > 0))
+for required_path in \
+    scripts/flywheel-mac-install-guest.sh \
+    scripts/flywheel-ensure-swap.sh \
+    scripts/flywheel-qualification-host.sh \
+    scripts/flywheel-partial-safe-doctor.sh \
+    scripts/lib/contract.sh \
+    install.sh; do
+    [[ -f "$guest_root/$required_path" && ! -L "$guest_root/$required_path" ]]
+done
+[[ "$(guest_git rev-parse --verify HEAD)" == "$expected_head" ]]
+[[ "$(guest_git rev-parse 'HEAD^{tree}')" == "$expected_tree" ]]
+SH
+    if ((verification_status != 0)); then
+        printf 'Flywheel: exact guest source verification failed; rerun flywheel mac install from a clean exact source\n' >&2
+        return "$verification_status"
+    fi
 }
 
 stage_source() {
     local root="$1"
     local head="$2"
+    local tree="$3"
     local short="${head:0:12}"
     local bundle="$TEMP_ROOT/acfs-$short.bundle"
     local bundle_sha256=""
@@ -582,19 +777,29 @@ stage_source() {
     safe_git -C "$root" bundle create "$bundle" HEAD
     bundle_sha256="$(sha256_file "$bundle")"
     "$LIMACTL" copy --backend=scp "$bundle" "$VM_NAME:$guest_bundle" >/dev/null
-    "$LIMACTL" shell "$VM_NAME" -- bash -lc '
+    "$LIMACTL" shell "$VM_NAME" -- /bin/bash -lc '
 set -euo pipefail
 guest_bundle="$1"
 guest_root="$2"
-head="$3"
 if [[ ! -d "$guest_root/.git" ]]; then
-    sudo git clone --quiet "$guest_bundle" "$guest_root"
+    sudo /usr/bin/env -i \
+        HOME=/root \
+        PATH=/usr/bin:/bin \
+        LANG=C \
+        LC_ALL=C \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_TERMINAL_PROMPT=0 \
+        /usr/bin/git \
+            -c core.fsmonitor=false \
+            -c core.untrackedCache=false \
+            -c core.hooksPath=/dev/null \
+            clone --quiet --no-local "$guest_bundle" "$guest_root"
 fi
-test "$(sudo git -C "$guest_root" rev-parse HEAD)" = "$head"
-sudo git -C "$guest_root" diff --quiet
-sudo git -C "$guest_root" diff --cached --quiet
-test -z "$(sudo git -C "$guest_root" ls-files --others --exclude-standard)"
-' -- "$guest_bundle" "$guest_root" "$head"
+' -- "$guest_bundle" "$guest_root"
+    verify_guest_source "$guest_root" "$head" "$tree" || return 1
     printf '%s\t%s\n' "$guest_root" "$bundle_sha256"
 }
 
@@ -604,14 +809,17 @@ write_install_receipt() {
     local tree="$3"
     local guest_root="$4"
     local bundle_sha256="$5"
-    local authority="$root/config/flywheel-partial-safe-allowlist.json"
+    local authority_relative="config/flywheel-partial-safe-allowlist.json"
+    local authority="$TEMP_ROOT/install-authority.json"
     local authority_sha256=""
     local candidate="$TEMP_ROOT/installation.json"
-    if [[ -f "$root/config/flywheel-license-clearance.json" ]]; then
-        authority="$root/config/flywheel-license-clearance.json"
+    if safe_git -C "$root" cat-file -e "$head:config/flywheel-license-clearance.json" 2>/dev/null; then
+        authority_relative="config/flywheel-license-clearance.json"
     fi
+    safe_git -C "$root" show "$head:$authority_relative" >"$authority"
+    /bin/chmod 0400 "$authority"
     authority_sha256="$(sha256_file "$authority")"
-    python3 -I - "$head" "$tree" "$guest_root" "$bundle_sha256" "$authority_sha256" "$authority" <<'PY' >"$candidate"
+    /usr/bin/python3 -I - "$head" "$tree" "$guest_root" "$bundle_sha256" "$authority_sha256" "$authority" <<'PY' >"$candidate"
 import datetime
 import json
 import sys
@@ -664,7 +872,7 @@ PY
 }
 
 installation_receipt_context() {
-    python3 -I - "$INSTALL_RECEIPT" <<'PY'
+    /usr/bin/python3 -I - "$INSTALL_RECEIPT" <<'PY'
 import hashlib
 import hmac
 import json
@@ -761,17 +969,54 @@ try:
         raise ValueError("digest_format")
 
     authority_contracts = {
-        "license_clearance": (
-            "LICENSE_CLEARED_PARTIAL",
-            "/var/lib/agent-flywheel/doctor-license-clearance.json",
-        ),
-        "partial_safe_allowlist": (
-            "PARTIAL_SAFE",
-            "/var/lib/agent-flywheel/doctor-allowlist.json",
-        ),
+        "partial_safe_allowlist": {
+            "claim": "PARTIAL_SAFE",
+            "guest_file": "/var/lib/agent-flywheel/doctor-allowlist.json",
+            "sha256": "736ce053c42c91b4219cc13dde7a604c33158e1369f3d4d91031672da80f3633",
+            "modules": {
+                "approved": 8,
+                "approved_ids": [
+                    "base.system", "users.ubuntu", "base.filesystem", "cli.modern",
+                    "lang.bun", "lang.uv", "lang.rust", "lang.go",
+                ],
+                "independent_holds": [],
+                "licensing_cleared": 0,
+                "licensing_pending": 27,
+            },
+        },
+        "license_clearance": {
+            "claim": "LICENSE_CLEARED_PARTIAL",
+            "guest_file": "/var/lib/agent-flywheel/doctor-license-clearance.json",
+            "sha256": "90b9e45ea3e5f2db4b409d38b539df2aef80b3a6a4faf69ec699d0cfa5515c68",
+            "modules": {
+                "approved": 36,
+                "approved_ids": [
+                    "base.system", "users.ubuntu", "base.filesystem", "cli.modern",
+                    "lang.bun", "lang.uv", "lang.rust", "lang.go", "tools.ast_grep",
+                    "agents.claude", "stack.ntm", "stack.meta_skill",
+                    "stack.automated_plan_reviser", "stack.jeffreysprompts",
+                    "stack.process_triage", "stack.ultimate_bug_scanner",
+                    "stack.beads_rust", "stack.beads_viewer", "stack.cass", "stack.cm",
+                    "stack.caam", "stack.slb", "stack.dcg", "stack.ru",
+                    "stack.brenner_bot", "stack.rch", "stack.srps",
+                    "stack.frankensearch", "stack.storage_ballast_helper",
+                    "stack.cross_agent_session_resumer", "stack.doodlestein_self_releaser",
+                    "stack.agent_settings_backup", "stack.pcr", "stack.eidetic_engine_cli",
+                    "stack.franken_markdown", "stack.pi_agent_rust",
+                ],
+                "independent_holds": ["stack.mcp_agent_mail", "stack.power_failure_resumer"],
+                "licensing_cleared": 27,
+                "licensing_pending": 0,
+            },
+        },
     }
     expected = authority_contracts.get(authority.get("kind"))
-    if expected is None or value.get("claim") != expected[0] or authority.get("guest_file") != expected[1]:
+    if (
+        expected is None
+        or value.get("claim") != expected["claim"]
+        or authority.get("guest_file") != expected["guest_file"]
+        or authority.get("sha256") != expected["sha256"]
+    ):
         raise ValueError("authority_binding")
     if not isinstance(value.get("installed_at"), str) or len(value["installed_at"]) > 64:
         raise ValueError("installed_at")
@@ -797,6 +1042,8 @@ try:
         modules["licensing_cleared"] != 0 or independent_holds
     ):
         raise ValueError("partial_safe_counts")
+    if modules != expected["modules"]:
+        raise ValueError("authority_semantics")
 
     normalized = dict(value)
     normalized["status"] = "recorded"
@@ -810,6 +1057,7 @@ install_command() {
     require_mac_tools
     local root=""
     local source_cli=""
+    local committed_cli=""
     local installed_cli="$HOME/.local/bin/flywheel"
     local head=""
     local tree=""
@@ -822,41 +1070,44 @@ install_command() {
         || die 2 "source checkout has no regular flywheel launcher"
     git_index_flags_safe "$root" \
         || die 2 "source checkout has unsafe assume-unchanged, skip-worktree, or unmerged index flags"
-    safe_git -C "$root" diff --no-ext-diff --quiet \
-        || die 2 "source checkout has uncommitted changes; commit or preserve them before flywheel mac install"
-    safe_git -C "$root" diff --no-ext-diff --cached --quiet \
+    head="$(safe_git -C "$root" rev-parse --verify HEAD)"
+    tree="$(safe_git -C "$root" rev-parse 'HEAD^{tree}')"
+    tracked_regular_files_match_head "$root" "$head" \
+        || die 2 "source checkout bytes differ from the exact committed tree; commit or preserve them before flywheel mac install"
+    safe_git -C "$root" diff --cached --quiet --no-ext-diff --no-textconv \
         || die 2 "source checkout has staged changes; commit or preserve them before flywheel mac install"
     [[ -z "$(safe_git -C "$root" ls-files --others --exclude-standard)" ]] \
         || die 2 "source checkout has untracked files; preserve them before flywheel mac install"
-    head="$(safe_git -C "$root" rev-parse HEAD)"
-    tree="$(safe_git -C "$root" rev-parse 'HEAD^{tree}')"
+    [[ "$(safe_git -C "$root" rev-parse --verify HEAD)" == "$head" \
+        && "$(safe_git -C "$root" rev-parse 'HEAD^{tree}')" == "$tree" ]] \
+        || die 2 "source checkout changed while its exact identity was being verified"
 
     acquire_lifecycle_lock "mac install"
     ensure_temp_root
     ensure_running
     info "Staging exact source $head"
-    stage_result="$(stage_source "$root" "$head")"
+    stage_result="$(stage_source "$root" "$head" "$tree")"
     IFS=$'\t' read -r guest_root bundle_sha256 <<<"$stage_result"
     [[ -n "$guest_root" && -n "$bundle_sha256" ]] \
         || die 3 "exact-source staging produced no identity; rerun flywheel mac install"
-    if [[ -f "$root/config/flywheel-license-clearance.json" ]]; then
+    if safe_git -C "$root" cat-file -e "$head:config/flywheel-license-clearance.json" 2>/dev/null; then
         info "Commissioning the license-cleared profile with independent holds preserved"
     else
         info "Commissioning the eight-module PARTIAL_SAFE profile"
     fi
+    verify_guest_source "$guest_root" "$head" "$tree" || return 1
     "$HEAVY_RUN" --stateful -- "$LIMACTL" shell "$VM_NAME" -- \
-        sudo bash -p "$guest_root/scripts/flywheel-mac-install-guest.sh" "$guest_root"
+        sudo /bin/bash -p "$guest_root/scripts/flywheel-mac-install-guest.sh" "$guest_root"
 
-    mkdir -p "$STATE_HOME" "$HOME/.local/bin"
-    chmod 0700 "$STATE_HOME"
+    /bin/mkdir -p "$STATE_HOME" "$HOME/.local/bin"
+    /bin/chmod 0700 "$STATE_HOME"
     printf '%s\n' "$root" >"$TEMP_ROOT/source-root"
     publish_private_file "$TEMP_ROOT/source-root" "$SOURCE_POINTER"
     write_install_receipt "$root" "$head" "$tree" "$guest_root" "$bundle_sha256"
-    if [[ -e "$installed_cli" && "$source_cli" -ef "$installed_cli" ]]; then
-        chmod 0755 "$installed_cli"
-    else
-        install -m 0755 "$source_cli" "$installed_cli"
-    fi
+    committed_cli="$TEMP_ROOT/installed-flywheel"
+    safe_git -C "$root" show "$head:flywheel" >"$committed_cli"
+    /bin/chmod 0500 "$committed_cli"
+    /usr/bin/install -m 0755 "$committed_cli" "$installed_cli"
     ok "Flywheel is installed on Ubuntu and available as flywheel"
 }
 
@@ -874,6 +1125,8 @@ status_command() {
     local installation_json=""
     local installation_status=""
     local installed_guest_root=""
+    local installed_head=""
+    local installed_tree=""
     local installed_authority_kind=""
     local installed_authority_sha256=""
     local root=""
@@ -891,6 +1144,8 @@ status_command() {
     installation_status="$(probe_value "$installation_json" '["status"]')"
     if [[ "$installation_status" == "recorded" ]]; then
         installed_guest_root="$(probe_value "$installation_json" '["source"]["guest_root"]')"
+        installed_head="$(probe_value "$installation_json" '["source"]["head"]')"
+        installed_tree="$(probe_value "$installation_json" '["source"]["tree"]')"
         installed_authority_kind="$(probe_value "$installation_json" '["authority"]["kind"]')"
         installed_authority_sha256="$(probe_value "$installation_json" '["authority"]["sha256"]')"
     fi
@@ -904,8 +1159,8 @@ status_command() {
             authority="$root/config/flywheel-license-clearance.json"
         fi
         if git_index_flags_safe "$root" \
-            && safe_git -C "$root" diff --no-ext-diff --quiet \
-            && safe_git -C "$root" diff --no-ext-diff --cached --quiet \
+            && tracked_regular_files_match_head "$root" "$head" \
+            && safe_git -C "$root" diff --cached --quiet --no-ext-diff --no-textconv \
             && [[ -z "$(safe_git -C "$root" ls-files --others --exclude-standard)" ]]; then
             source_clean="true"
         fi
@@ -913,19 +1168,24 @@ status_command() {
     if [[ "$(probe_value "$probe" '["contract"]["matches"]')" == "true" \
         && "$status" == "Running" && "$installation_status" == "recorded" ]]; then
         set +e
-        qualification_json="$(qualification_command "$installed_guest_root" 2>/dev/null)"
+        qualification_json="$(qualification_command \
+            "$installed_guest_root" "$installed_head" "$installed_tree" 2>/dev/null)"
         doctor_json="$(doctor_for_installation \
             "$installed_guest_root" \
+            "$installed_head" \
+            "$installed_tree" \
             "$installed_authority_kind" \
             "$installed_authority_sha256" \
             --json 2>/dev/null)"
         set -e
     fi
-    status_json="$(python3 -I - "$probe" "$root" "$head" "$tree" "$source_clean" "$installation_json" "$authority" "$repository_control" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
+    status_json="$(/usr/bin/python3 -I - "$probe" "$root" "$head" "$tree" "$source_clean" "$installation_json" "$authority" "$repository_control" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
 import hashlib
+import hmac
 import json
 import os
 import pathlib
+import re
 import stat
 import subprocess
 import sys
@@ -991,18 +1251,25 @@ def read_json(path, label):
         return None, None
 
 def safe_git(root, *arguments):
-    environment = os.environ.copy()
-    environment.update({
+    environment = {
+        "HOME": os.environ.get("HOME", "/"),
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_SYSTEM": os.devnull,
         "GIT_EXTERNAL_DIFF": "",
+        "GIT_LITERAL_PATHSPECS": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_OPTIONAL_LOCKS": "0",
         "GIT_TERMINAL_PROMPT": "0",
-    })
+    }
     completed = subprocess.run(
         [
-            "git",
+            "/usr/bin/git",
             "-c", "core.fsmonitor=false",
             "-c", "core.untrackedCache=false",
             "-c", f"core.hooksPath={os.devnull}",
@@ -1032,8 +1299,6 @@ def exact_validator_bytes(root, head, control_path):
             unsafe.append(record[2:] if len(record) >= 3 else record)
     if unsafe:
         raise ValueError("repository receipt validator source has unsafe index flags")
-    if safe_git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all"):
-        raise ValueError("repository receipt validator source is not clean")
     if safe_git(root, "rev-parse", "HEAD").decode().strip() != head:
         raise ValueError("repository receipt validator source head changed")
     control_raw = stable_read(control_path, 4 * 1024 * 1024, "repository receipt validator")
@@ -1044,15 +1309,33 @@ def exact_validator_bytes(root, head, control_path):
         raise ValueError("repository receipt validator source changed during validation")
     return control_raw
 
-def parse_json(raw, schema):
-    if raw:
-        try:
-            value = json.loads(raw)
-            if isinstance(value, dict):
-                return value
-        except json.JSONDecodeError:
-            pass
-    return {"schema": schema, "status": "not_run"}
+def invalid_receipt(schema, error):
+    return {"schema": schema, "status": "invalid", "error": error}
+
+def load_receipt(raw, schema):
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("receipt is not valid JSON") from error
+    if not isinstance(value, dict) or value.get("schema") != schema:
+        raise ValueError("receipt schema is invalid")
+    return value
+
+def verify_receipt_digest(value):
+    declared = value.get("receipt_sha256")
+    if not isinstance(declared, str) or re.fullmatch(r"[0-9a-f]{64}", declared) is None:
+        raise ValueError("receipt digest is missing or malformed")
+    canonical_value = dict(value)
+    canonical_value.pop("receipt_sha256", None)
+    canonical = (
+        json.dumps(canonical_value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        + "\n"
+    ).encode()
+    observed = hashlib.sha256(canonical).hexdigest()
+    if not hmac.compare_digest(declared, observed):
+        raise ValueError("receipt digest does not match its canonical contents")
 
 authority, authority_raw = read_json(authority_path, "commissioning authority")
 authority = authority or {}
@@ -1068,12 +1351,6 @@ expected_authority_kind = receipt_authority.get("kind")
 license_cleared = expected_authority_kind == "license_clearance"
 current_authority_sha256 = hashlib.sha256(authority_raw).hexdigest() if authority_raw is not None else None
 
-qualification = parse_json(qualification_raw, "agent-flywheel.qualification-host/v1")
-doctor = parse_json(
-    doctor_raw,
-    "agent-flywheel.license-cleared-doctor/v1" if license_cleared else "agent-flywheel.partial-safe-doctor/v1",
-)
-
 recorded_source = installation.get("source", {})
 source_exact = bool(
     source_head
@@ -1087,6 +1364,178 @@ authority_exact = bool(
     and installation.get("authority", {}).get("sha256") == current_authority_sha256
 )
 installation["matches_current_authority"] = authority_exact if current_authority_sha256 else None
+
+qualification_schema = "agent-flywheel.qualification-host/v1"
+doctor_schema = (
+    "agent-flywheel.license-cleared-doctor/v1"
+    if license_cleared
+    else "agent-flywheel.partial-safe-doctor/v1"
+)
+
+def validate_qualification(raw):
+    if not raw:
+        return {"schema": qualification_schema, "status": "not_run"}
+    try:
+        value = load_receipt(raw, qualification_schema)
+        if set(value) != {
+            "bundle", "contract", "host", "observed_at", "receipt_sha256",
+            "requirements", "schema", "source", "status", "summary",
+        }:
+            raise ValueError("qualification receipt fields are invalid")
+        verify_receipt_digest(value)
+        expected_contract = {
+            "host_identity": "any-compliant-host",
+            "ubuntu_version": "24.04",
+            "architectures": ["aarch64", "x86_64"],
+            "minimum_disk_gib": 20,
+            "minimum_memory_gib": 8,
+            "minimum_swap_gib": 8,
+            "minimum_bash_major": 4,
+            "isolation_required": True,
+            "clean_source_identity_required": True,
+            "critical_source_bytes_required": ["all-tracked-regular-files"],
+            "exact_bundle_identity_required": True,
+            "receipt_digest": "sha256(canonical-json-without-receipt_sha256+newline)",
+        }
+        if value.get("contract") != expected_contract:
+            raise ValueError("qualification contract is not exact")
+        if not isinstance(value.get("observed_at"), str) or len(value["observed_at"]) > 64:
+            raise ValueError("qualification observation time is invalid")
+        source = value.get("source")
+        if not isinstance(source, dict) or set(source) != {
+            "clean", "clean_state_evidence", "git_paths", "head", "requested_root", "tree",
+        }:
+            raise ValueError("qualification source fields are invalid")
+        if source.get("head") != recorded_source.get("head") or source.get("tree") != recorded_source.get("tree"):
+            raise ValueError("qualification source identity is not the installed source")
+        if source.get("requested_root") != recorded_source.get("guest_root"):
+            raise ValueError("qualification source root is not the installed source")
+        git_paths = source.get("git_paths")
+        if not isinstance(git_paths, dict) or set(git_paths) != {"common_dir", "git_dir", "index", "root"}:
+            raise ValueError("qualification Git paths are invalid")
+        if git_paths.get("root") != recorded_source.get("guest_root") or any(
+            not isinstance(item, str) or not item.startswith("/") for item in git_paths.values()
+        ):
+            raise ValueError("qualification Git paths are not absolute and bound")
+        evidence = source.get("clean_state_evidence")
+        expected_evidence_keys = {
+            "critical_source_bytes_match", "git_repository", "index_clean",
+            "index_flags_clean", "repository_binding_stable", "sparse_checkout_disabled",
+            "unmerged_index_clean", "untracked_clean", "worktree_clean",
+        }
+        if not isinstance(evidence, dict) or set(evidence) != expected_evidence_keys:
+            raise ValueError("qualification clean-state evidence is invalid")
+        bundle = value.get("bundle")
+        expected_bundle_sha256 = installation.get("bundle", {}).get("sha256")
+        if not isinstance(bundle, dict) or set(bundle) != {"sha256", "source_head", "verified"}:
+            raise ValueError("qualification bundle fields are invalid")
+        if (
+            bundle.get("sha256") != expected_bundle_sha256
+            or bundle.get("source_head") != recorded_source.get("head")
+            or bundle.get("verified") is not True
+        ):
+            raise ValueError("qualification bundle is not the installed bundle")
+        host = value.get("host")
+        if not isinstance(host, dict) or set(host) != {
+            "architecture", "bash_version", "isolation", "os", "resources",
+        }:
+            raise ValueError("qualification host fields are invalid")
+        if host.get("os") != {"id": "ubuntu", "version": "24.04"}:
+            raise ValueError("qualification operating system is invalid")
+        if host.get("architecture") not in {"aarch64", "x86_64"}:
+            raise ValueError("qualification architecture is invalid")
+        if not isinstance(host.get("bash_version"), str) or not host["bash_version"]:
+            raise ValueError("qualification Bash version is invalid")
+        if not isinstance(host.get("isolation"), str) or host["isolation"] in {"", "none"}:
+            raise ValueError("qualification isolation is invalid")
+        resources = host.get("resources")
+        if not isinstance(resources, dict) or set(resources) != {
+            "disk_free_bytes", "memory_total_bytes", "swap_total_bytes",
+        } or any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in resources.values()):
+            raise ValueError("qualification resources are invalid")
+        requirements = value.get("requirements")
+        expected_requirement_ids = [
+            "ubuntu_version", "architecture", "bash_runtime", "disk_free", "memory_total",
+            "swap_total", "isolation", "source_identity", "bundle_identity",
+        ]
+        if not isinstance(requirements, list) or [item.get("id") for item in requirements if isinstance(item, dict)] != expected_requirement_ids:
+            raise ValueError("qualification requirements are invalid")
+        if any(
+            set(item) != {"detail", "id", "status"}
+            or item.get("status") not in {"pass", "fail"}
+            or not isinstance(item.get("detail"), str)
+            for item in requirements
+        ):
+            raise ValueError("qualification requirement rows are invalid")
+        failures = sum(item["status"] != "pass" for item in requirements)
+        expected_status = "pass" if failures == 0 else "fail"
+        if value.get("status") != expected_status or value.get("summary") != {
+            "pass": len(requirements) - failures, "fail": failures,
+        }:
+            raise ValueError("qualification summary is inconsistent")
+        if value["status"] == "pass" and (
+            source.get("clean") is not True or any(item is not True for item in evidence.values())
+        ):
+            raise ValueError("passing qualification has incomplete clean-state evidence")
+        return value
+    except (AttributeError, TypeError, ValueError) as error:
+        return invalid_receipt(qualification_schema, str(error))
+
+def validate_doctor(raw):
+    if not raw:
+        return {"schema": doctor_schema, "status": "not_run"}
+    try:
+        value = load_receipt(raw, doctor_schema)
+        if set(value) != {
+            "authority", "checks", "claim", "fully_commissioned", "receipt_sha256",
+            "schema", "source", "status", "summary",
+        }:
+            raise ValueError("doctor receipt fields are invalid")
+        verify_receipt_digest(value)
+        if value.get("claim") != expected_claim or value.get("fully_commissioned") is not False:
+            raise ValueError("doctor claim is not the installed claim")
+        if value.get("source") != {
+            "head": recorded_source.get("head"), "tree": recorded_source.get("tree"),
+        }:
+            raise ValueError("doctor source is not the installed source")
+        if value.get("authority") != {
+            "kind": receipt_authority.get("kind"), "sha256": receipt_authority.get("sha256"),
+        }:
+            raise ValueError("doctor authority is not the installed authority")
+        expected_check_ids = [
+            "license_clearance" if license_cleared else "allowlist",
+            "target_identity", "base.system", "users.ubuntu", "host.swap_contract",
+            "base.filesystem", "cli.modern", "lang.bun/bun", "lang.uv/uv",
+            "lang.rust/rustc", "lang.rust/cargo", "lang.go/go",
+            "license_scope" if license_cleared else "held_exclusions",
+        ]
+        if license_cleared:
+            expected_check_ids.extend([
+                "expanded_modules", "stack.srps/service", "independent_holds",
+            ])
+        expected_check_ids.append("state")
+        checks = value.get("checks")
+        if not isinstance(checks, list) or [item.get("id") for item in checks if isinstance(item, dict)] != expected_check_ids:
+            raise ValueError("doctor checks are invalid")
+        if any(
+            set(item) != {"detail", "id", "status"}
+            or item.get("status") not in {"pass", "fail"}
+            or not isinstance(item.get("detail"), str)
+            for item in checks
+        ):
+            raise ValueError("doctor check rows are invalid")
+        failures = sum(item["status"] != "pass" for item in checks)
+        expected_status = "pass" if failures == 0 else "fail"
+        if value.get("status") != expected_status or value.get("summary") != {
+            "pass": len(checks) - failures, "warn": 0, "fail": failures,
+        }:
+            raise ValueError("doctor summary is inconsistent")
+        return value
+    except (AttributeError, TypeError, ValueError) as error:
+        return invalid_receipt(doctor_schema, str(error))
+
+qualification = validate_qualification(qualification_raw)
+doctor = validate_doctor(doctor_raw)
 
 rollout = {"status": "not_connected"}
 if rollout_receipt_path:
@@ -1124,6 +1573,12 @@ if installation.get("status") == "receipt_missing":
     blockers.append({"scope": "lifecycle", "code": "installation_receipt_missing", "next_command": "flywheel mac install"})
 elif installation.get("status") != "recorded":
     blockers.append({"scope": "lifecycle", "code": "installation_receipt_invalid", "next_command": "flywheel mac install"})
+elif source_root and not authority_exact:
+    blockers.append({
+        "scope": "lifecycle",
+        "code": "current_authority_mismatch",
+        "next_command": "review the current authority, then run flywheel mac install from the intended clean exact source",
+    })
 if vm["healthy"] and installation.get("status") == "recorded" and qualification.get("status") != "pass":
     blockers.append({"scope": "qualification", "code": "host_contract_failed", "next_command": "flywheel status --json"})
 if vm["healthy"] and installation.get("status") == "recorded" and doctor.get("status") != "pass":
@@ -1179,7 +1634,7 @@ PY
     if ((JSON == 1)); then
         printf '%s\n' "$status_json"
     else
-        python3 -I -c '
+        /usr/bin/python3 -I -c '
 import json,sys
 value=json.loads(sys.argv[1])
 print("Flywheel: {}".format(value["readiness"]))
@@ -1218,31 +1673,37 @@ for blocker in value["blockers"]:
     ))
 ' "$status_json"
     fi
-    python3 -I -c 'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1])["readiness"] == "ready" else 1)' "$status_json"
+    /usr/bin/python3 -I -c 'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1])["readiness"] == "ready" else 1)' "$status_json"
 }
 
 qualification_command() {
     local guest_root="$1"
+    local expected_head="$2"
+    local expected_tree="$3"
     [[ "$guest_root" =~ ^/opt/agent-flywheel-acfs-[0-9a-f]{40}$ ]] \
         || die 2 "installation receipt contains an invalid qualification source"
-    "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
+    verify_guest_source "$guest_root" "$expected_head" "$expected_tree" || return 1
+    "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu /usr/bin/env -i \
         HOME=/home/ubuntu \
-        PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         FLYWHEEL_SOURCE_ROOT="$guest_root" \
-        bash -p "$guest_root/scripts/flywheel-qualification-host.sh" --json
+        /bin/bash -p "$guest_root/scripts/flywheel-qualification-host.sh" --json
 }
 
 doctor_for_installation() {
     local guest_root="$1"
-    local authority_kind="$2"
-    local authority_sha256="$3"
-    local json_flag="${4:-}"
+    local expected_head="$2"
+    local expected_tree="$3"
+    local authority_kind="$4"
+    local authority_sha256="$5"
+    local json_flag="${6:-}"
     local authority_name=""
     local authority_file=""
     local authority_env=(__flywheel_sentinel__)
     [[ "$guest_root" =~ ^/opt/agent-flywheel-acfs-[0-9a-f]{40}$ \
         && "$authority_sha256" =~ ^[0-9a-f]{64}$ ]] \
         || die 2 "installation receipt contains invalid doctor bindings"
+    verify_guest_source "$guest_root" "$expected_head" "$expected_tree" || return 1
     case "$authority_kind" in
         partial_safe_allowlist)
             authority_name="ACFS_PARTIAL_SAFE_ALLOWLIST_FILE"
@@ -1254,10 +1715,10 @@ doctor_for_installation() {
             ;;
         *) die 2 "installation receipt contains an unsupported authority" ;;
     esac
-    "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
+    "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu /usr/bin/env -i \
         HOME=/home/ubuntu \
-        PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        bash -p -c '
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        /bin/bash -p -c '
 set -euo pipefail
 authority_file="$1"
 authority_sha256="$2"
@@ -1268,23 +1729,23 @@ observed_sha256="$(/usr/bin/sha256sum "$authority_file" | /usr/bin/awk "NR == 1 
         || return 1
     authority_env+=("$authority_name=$authority_file")
     if [[ "$json_flag" == "--json" ]]; then
-        "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
+        "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu /usr/bin/env -i \
             HOME=/home/ubuntu \
-            PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             TARGET_USER=ubuntu \
             TARGET_HOME=/home/ubuntu \
             FLYWHEEL_SOURCE_ROOT="$guest_root" \
             "${authority_env[@]:1}" \
-            bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh" --json
+            /bin/bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh" --json
     else
-        "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
+        "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu /usr/bin/env -i \
             HOME=/home/ubuntu \
-            PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             TARGET_USER=ubuntu \
             TARGET_HOME=/home/ubuntu \
             FLYWHEEL_SOURCE_ROOT="$guest_root" \
             "${authority_env[@]:1}" \
-            bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh"
+            /bin/bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh"
     fi
 }
 
@@ -1294,6 +1755,8 @@ doctor_command() {
     local installation_json=""
     local installation_status=""
     local guest_root=""
+    local expected_head=""
+    local expected_tree=""
     local authority_kind=""
     local authority_sha256=""
     local json_flag=""
@@ -1314,12 +1777,16 @@ doctor_command() {
     [[ "$installation_status" == "recorded" ]] \
         || die 2 "installation receipt is invalid; run flywheel mac install"
     guest_root="$(probe_value "$installation_json" '["source"]["guest_root"]')"
+    expected_head="$(probe_value "$installation_json" '["source"]["head"]')"
+    expected_tree="$(probe_value "$installation_json" '["source"]["tree"]')"
     authority_kind="$(probe_value "$installation_json" '["authority"]["kind"]')"
     authority_sha256="$(probe_value "$installation_json" '["authority"]["sha256"]')"
     if ((JSON == 1)) || [[ "$force_json" == "--json-internal" ]]; then
         json_flag="--json"
     fi
-    doctor_for_installation "$guest_root" "$authority_kind" "$authority_sha256" "$json_flag"
+    doctor_for_installation \
+        "$guest_root" "$expected_head" "$expected_tree" \
+        "$authority_kind" "$authority_sha256" "$json_flag"
 }
 
 stop_command() {
@@ -1352,7 +1819,7 @@ capabilities_command() {
     if [[ -n "$root" && -f "$root/config/flywheel-license-clearance.json" ]]; then
         license_cleared="true"
     fi
-    python3 -I - "$version" "$license_cleared" <<'PY'
+    /usr/bin/python3 -I - "$version" "$license_cleared" <<'PY'
 import json
 import sys
 
@@ -1434,11 +1901,35 @@ repository_control_command() {
     local resource="$2"
     local root=""
     local script=""
+    local head=""
+    local tree_entry=""
     local arguments=("$action" "$resource")
     root="$(source_root)"
     script="$root/scripts/flywheel-repository-control.py"
-    [[ -f "$script" && ! -L "$script" ]] \
+    [[ -f "$script" && ! -L "$script" \
+        && ( -d "$root/.git" || -f "$root/.git" ) ]] \
         || die 3 "repository control is unavailable; rerun flywheel mac install from the current source"
+    git_index_flags_safe "$root" \
+        || die 2 "ACFS source checkout has unsafe assume-unchanged, skip-worktree, or unmerged index flags (including sparse state)"
+    head="$(safe_git -C "$root" rev-parse --verify HEAD)"
+    [[ "$head" =~ ^[0-9a-f]{40}$ ]] \
+        || die 3 "repository control source identity is unavailable"
+    tracked_regular_files_match_head "$root" "$head" \
+        || die 2 "ACFS source checkout bytes differ from the exact committed tree; direct repository control did not run"
+    safe_git -C "$root" diff --cached --quiet --no-ext-diff --no-textconv \
+        || die 2 "ACFS source checkout has staged changes; direct repository control did not run"
+    [[ -z "$(safe_git -C "$root" ls-files --others --exclude-standard)" ]] \
+        || die 2 "ACFS source checkout has untracked files; direct repository control did not run"
+    tree_entry="$(safe_git -C "$root" ls-tree "$head" -- scripts/flywheel-repository-control.py)"
+    [[ "$tree_entry" =~ ^100(644|755)[[:space:]]blob[[:space:]][0-9a-f]{40}[[:space:]] ]] \
+        || die 3 "repository control committed source is unavailable"
+    safe_git -C "$root" show "$head:scripts/flywheel-repository-control.py" \
+        | /usr/bin/cmp -s - "$script" \
+        || die 2 "repository control working bytes differ from the exact committed source"
+    ensure_temp_root
+    script="$TEMP_ROOT/flywheel-repository-control.py"
+    safe_git -C "$root" show "$head:scripts/flywheel-repository-control.py" >"$script"
+    /bin/chmod 0500 "$script"
     if [[ "$action" == "eligibility" ]]; then
         [[ -n "$PILOT_RECEIPT" && -n "$PILOT_SOURCE" && -n "$TARGET_REPOSITORY" ]] \
             || die 2 "repository eligibility requires --pilot-receipt, --pilot-source, and --target-repository"
@@ -1449,7 +1940,7 @@ repository_control_command() {
         )
     fi
     ((JSON == 1)) && arguments+=(--json)
-    python3 -I "$script" "${arguments[@]}"
+    /usr/bin/python3 -I "$script" "${arguments[@]}"
 }
 
 command_name="${1:-help}"
