@@ -23,7 +23,13 @@ INSTALL_CLEARANCE="$STATE_ROOT/install-license-clearance.json"
 DOCTOR_CLEARANCE="$STATE_ROOT/doctor-license-clearance.json"
 SOURCE_CLEARANCE="$SOURCE_ROOT/config/flywheel-license-clearance.json"
 INSTALL_LOG="/var/log/agent-flywheel/install-$(date -u +%Y%m%dT%H%M%SZ).log"
+ACTIVE_STATE="$TARGET_HOME/.acfs/state.json"
+STATE_HISTORY="$STATE_ROOT/state-history"
+CONVERGENCE_RECEIPT="$STATE_ROOT/convergence.json"
 LICENSE_CLEARED=false
+W3_TRANSITION_ACTIVE=false
+W3_TRANSITION_STATE=""
+W3_TRANSITION_SHA256=""
 
 if [[ "$SOURCE_ROOT" != /opt/agent-flywheel-acfs-* || ! -d "$SOURCE_ROOT/.git" ]]; then
     printf 'Refusing untrusted Flywheel source root: %s\n' "$SOURCE_ROOT" >&2
@@ -65,11 +71,101 @@ doctor() {
         bash -p "$SOURCE_ROOT/scripts/flywheel-partial-safe-doctor.sh" --json
 }
 
+doctor_partial_safe() {
+    sudo -u ubuntu env \
+        HOME="$TARGET_HOME" \
+        PATH="$TARGET_HOME/.local/bin:$TARGET_HOME/.bun/bin:$TARGET_HOME/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        TARGET_USER="$TARGET_USER" \
+        TARGET_HOME="$TARGET_HOME" \
+        FLYWHEEL_SOURCE_ROOT="$SOURCE_ROOT" \
+        ACFS_PARTIAL_SAFE_ALLOWLIST_FILE="$DOCTOR_ALLOWLIST" \
+        bash -p "$SOURCE_ROOT/scripts/flywheel-partial-safe-doctor.sh" --json
+}
+
+state_sha256() {
+    /usr/bin/sha256sum "$1" | /usr/bin/awk 'NR == 1 { print $1 }'
+}
+
+restore_w3_transition() {
+    local failed_state=""
+    local failed_sha256=""
+
+    [[ "$W3_TRANSITION_ACTIVE" == "true" ]] || return 0
+    if [[ -e "$ACTIVE_STATE" || -L "$ACTIVE_STATE" ]]; then
+        failed_sha256="$(state_sha256 "$ACTIVE_STATE" 2>/dev/null || printf unknown)"
+        failed_state="$STATE_HISTORY/failed-license-cleared-$(date -u +%Y%m%dT%H%M%SZ)-${failed_sha256:0:16}.json"
+        if [[ -e "$failed_state" || -L "$failed_state" ]]; then
+            failed_state="$STATE_HISTORY/failed-license-cleared-$(date -u +%Y%m%dT%H%M%SZ)-$$-${failed_sha256:0:16}.json"
+        fi
+        mv -- "$ACTIVE_STATE" "$failed_state"
+        chown root:root "$failed_state"
+        chmod 0444 "$failed_state"
+    fi
+    install -d -o ubuntu -g ubuntu -m 0755 "$TARGET_HOME/.acfs"
+    install -o ubuntu -g ubuntu -m 0644 "$W3_TRANSITION_STATE" "$ACTIVE_STATE"
+    if [[ "$(state_sha256 "$ACTIVE_STATE")" != "$W3_TRANSITION_SHA256" ]]; then
+        printf 'Failed to restore the exact pre-convergence ACFS state. Preserved source: %s\n' \
+            "$W3_TRANSITION_STATE" >&2
+        return 1
+    fi
+    W3_TRANSITION_ACTIVE=false
+    printf 'Restored the exact pre-convergence ACFS state after a failed commissioning attempt.\n' >&2
+}
+
+prepare_w3_transition() {
+    local state_name=""
+
+    if [[ ! -f "$ACTIVE_STATE" || -L "$ACTIVE_STATE" ]]; then
+        printf 'Refusing to converge a missing, nonregular, or symlinked ACFS state file.\n' >&2
+        return 1
+    fi
+    if [[ -L "$STATE_ROOT" || -L "$STATE_HISTORY" ]]; then
+        printf 'Refusing a symlinked Flywheel state-history path.\n' >&2
+        return 1
+    fi
+    install -d -o root -g root -m 0700 "$STATE_HISTORY"
+    W3_TRANSITION_SHA256="$(state_sha256 "$ACTIVE_STATE")"
+    [[ "$W3_TRANSITION_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+    state_name="partial-safe-$(date -u +%Y%m%dT%H%M%SZ)-${W3_TRANSITION_SHA256:0:16}.json"
+    W3_TRANSITION_STATE="$STATE_HISTORY/$state_name"
+    if [[ -e "$W3_TRANSITION_STATE" || -L "$W3_TRANSITION_STATE" ]]; then
+        W3_TRANSITION_STATE="$STATE_HISTORY/partial-safe-$(date -u +%Y%m%dT%H%M%SZ)-$$-${W3_TRANSITION_SHA256:0:16}.json"
+    fi
+    mv -- "$ACTIVE_STATE" "$W3_TRANSITION_STATE"
+    W3_TRANSITION_ACTIVE=true
+    if ! chown root:root "$W3_TRANSITION_STATE" \
+        || ! chmod 0444 "$W3_TRANSITION_STATE" \
+        || [[ "$(state_sha256 "$W3_TRANSITION_STATE")" != "$W3_TRANSITION_SHA256" ]]; then
+        restore_w3_transition
+        return 1
+    fi
+}
+
+finalize_w3_transition() {
+    local candidate=""
+
+    [[ "$W3_TRANSITION_ACTIVE" == "true" ]] || return 0
+    candidate="$(mktemp "$STATE_ROOT/.convergence.XXXXXXXX")"
+    jq -cn \
+        --arg prior_state "$W3_TRANSITION_STATE" \
+        --arg prior_state_sha256 "$W3_TRANSITION_SHA256" \
+        --arg source_head "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" \
+        --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{schema:"agent-flywheel.convergence/v1",status:"pass",from:"PARTIAL_SAFE",to:"LICENSE_CLEARED_PARTIAL",prior_state:{path:$prior_state,sha256:$prior_state_sha256},source:{head:$source_head},completed_at:$completed_at}' \
+        >"$candidate"
+    chmod 0444 "$candidate"
+    mv -f -- "$candidate" "$CONVERGENCE_RECEIPT"
+    chown root:root "$CONVERGENCE_RECEIPT"
+    W3_TRANSITION_ACTIVE=false
+}
+
+trap restore_w3_transition EXIT
+
 apt-get -o Acquire::Retries=3 update
 apt-get -o DPkg::Lock::Timeout=120 install -y \
     curl git ca-certificates unzip tar xz-utils jq build-essential gnupg lsb-release
 
-if [[ -f "$TARGET_HOME/.acfs/state.json" ]]; then
+if [[ -f "$ACTIVE_STATE" ]]; then
     if doctor; then
         if [[ "$LICENSE_CLEARED" == "true" ]]; then
             printf '{"action":"unchanged","claim":"LICENSE_CLEARED_PARTIAL","status":"pass"}\n'
@@ -83,6 +179,11 @@ if [[ -f "$TARGET_HOME/.acfs/state.json" ]]; then
         printf 'Preserve and reconcile %s before a fresh install.\n' "$TARGET_HOME/.acfs/state.json" >&2
         exit 1
     fi
+    if ! doctor_partial_safe >/dev/null; then
+        printf 'Existing state failed its original PARTIAL_SAFE doctor; refusing convergence.\n' >&2
+        exit 1
+    fi
+    prepare_w3_transition
     printf 'Converging the existing PARTIAL_SAFE state to the license-cleared profile.\n' >&2
 fi
 
@@ -128,3 +229,4 @@ if ((install_status != 0)); then
 fi
 
 doctor
+finalize_w3_transition
