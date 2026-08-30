@@ -269,6 +269,23 @@ assert value["cohorts"][0]["cohort"] == "pilot"
 assert value["cohorts"][0]["live_rollout_eligible"] is False
 assert len(value["plan_sha256"]) == 64
 ' "$plan_json"
+printf '%s\n' "$plan_json" >"$TEST_ROOT/rollout-plan.json"
+plan_status_json="$("$REPO_ROOT/flywheel" status --json --rollout-receipt "$TEST_ROOT/rollout-plan.json")"
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+rollout=value["repository_rollout"]
+assert rollout["status"] == "evidence_connected"
+assert rollout["schema"] == "agent-flywheel.progressive-rollout-plan/v1"
+assert rollout["scope"] == "plan-only"
+assert rollout["repository_count"] == 1
+assert rollout["repository"]["name"] == "qualification-source"
+assert rollout["repositories"] == [rollout["repository"]]
+assert rollout["setup_pr_eligible"] is True
+assert rollout["live_rollout_eligible"] is False
+assert rollout["bookclub_eligible"] is None
+assert [item["code"] for item in value["blockers"]] == ["live_rollout_not_proven"]
+' "$plan_status_json"
 
 typo_rc=0
 typo_error="$("$REPO_ROOT/flywheel" statsu 2>&1)" || typo_rc=$?

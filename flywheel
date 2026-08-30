@@ -427,15 +427,58 @@ if rollout_receipt_path:
         value = json.loads(raw)
         if not isinstance(value, dict):
             raise ValueError("receipt root is not an object")
-        rollout = {
-            "status": "evidence_connected",
-            "receipt_sha256": hashlib.sha256(raw).hexdigest(),
-            "schema": value.get("schema"),
-            "declared_status": value.get("status"),
-            "scope": value.get("scope"),
-            "repository": value.get("repository"),
-            "bookclub_eligible": value.get("bookclub_eligible"),
-        }
+        schema = value.get("schema")
+        if schema == "agent-flywheel.repository-rollout/v1":
+            if (
+                not isinstance(value.get("status"), str)
+                or not isinstance(value.get("scope"), str)
+                or not isinstance(value.get("repository"), str)
+                or not isinstance(value.get("bookclub_eligible"), bool)
+            ):
+                raise ValueError("repository rollout receipt fields are invalid")
+            rollout = {
+                "status": "evidence_connected",
+                "receipt_sha256": hashlib.sha256(raw).hexdigest(),
+                "schema": schema,
+                "declared_status": value["status"],
+                "scope": value["scope"],
+                "repository": value["repository"],
+                "bookclub_eligible": value["bookclub_eligible"],
+            }
+        elif schema == "agent-flywheel.progressive-rollout-plan/v1":
+            plan_digest = value.get("plan_sha256")
+            digest_source = dict(value)
+            digest_source.pop("plan_sha256", None)
+            observed_plan_digest = hashlib.sha256(
+                (json.dumps(digest_source, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            ).hexdigest()
+            cohorts = value.get("cohorts")
+            if (
+                not isinstance(plan_digest, str)
+                or plan_digest != observed_plan_digest
+                or not isinstance(cohorts, list)
+                or not cohorts
+                or any(not isinstance(item, dict) or not isinstance(item.get("repository"), dict) for item in cohorts)
+            ):
+                raise ValueError("progressive rollout plan content binding is invalid")
+            repositories = [item["repository"] for item in cohorts]
+            rollout = {
+                "status": "evidence_connected",
+                "receipt_sha256": hashlib.sha256(raw).hexdigest(),
+                "schema": schema,
+                "declared_status": value.get("status"),
+                "scope": "plan-only",
+                "execution_status": value.get("execution_status"),
+                "mutation_authorized": value.get("mutation_authorized"),
+                "repository": repositories[0] if len(repositories) == 1 else None,
+                "repositories": repositories,
+                "repository_count": len(repositories),
+                "setup_pr_eligible": all(item.get("setup_pr_eligible") is True for item in cohorts),
+                "live_rollout_eligible": all(item.get("live_rollout_eligible") is True for item in cohorts),
+                "bookclub_eligible": None,
+            }
+        else:
+            raise ValueError("unsupported rollout receipt schema")
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         rollout = {"status": "invalid", "error": str(error)}
 
