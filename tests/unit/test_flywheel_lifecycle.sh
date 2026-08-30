@@ -187,6 +187,14 @@ assert value["qualification"]["status"] == "pass"
 assert value["doctor"]["status"] == "pass"
 assert [item["code"] for item in value["blockers"]] == ["receipt_not_connected"]
 ' "$running_json"
+running_text="$("$REPO_ROOT/flywheel" status)"
+[[ "$running_text" == *'Flywheel: ready'* ]]
+[[ "$running_text" == *'VM: agent-flywheel-ubuntu2404 (Running)'* ]]
+[[ "$running_text" == *'Modules: 8 approved; 27 licensing approvals pending'* ]]
+[[ "$running_text" == *'Qualification: pass'* ]]
+[[ "$running_text" == *'Doctor: pass'* ]]
+[[ "$running_text" == *'Repository rollout: not_connected'* ]]
+[[ "$running_text" == *'Blocker [repository_rollout]: receipt_not_connected'* ]]
 
 printf '{"schema":"agent-flywheel.repository-rollout/v1","status":"pass","scope":"synthetic-pilot-only","repository":"synthetic/local","bookclub_eligible":true}\n' \
     >"$TEST_ROOT/rollout.json"
@@ -237,6 +245,10 @@ assert rollout["external_mutation"] is False
 assert rollout["git"]["clean"] is True
 assert [item["code"] for item in value["blockers"]] == ["live_rollout_not_proven"]
 ' "$synthetic_status_json"
+synthetic_status_text="$("$REPO_ROOT/flywheel" status --rollout-receipt "$TEST_ROOT/synthetic-pilot.json")"
+[[ "$synthetic_status_text" == *'Flywheel: ready'* ]]
+[[ "$synthetic_status_text" == *'Repository rollout: evidence_connected'* ]]
+[[ "$synthetic_status_text" == *'Blocker [repository_rollout]: live_rollout_not_proven'* ]]
 
 ln -s "$TEST_ROOT/rollout.json" "$TEST_ROOT/rollout-link.json"
 linked_rollout_json="$("$REPO_ROOT/flywheel" status --json --rollout-receipt "$TEST_ROOT/rollout-link.json")"

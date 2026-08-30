@@ -584,15 +584,22 @@ PY
         python3 -c '
 import json,sys
 value=json.loads(sys.argv[1])
-print(f"Flywheel: {value[\"readiness\"]}")
-print(f"VM: {value[\"vm\"][\"name\"]} ({value[\"vm\"][\"status\"]})")
-print(f"Source: {value[\"source\"][\"head\"] or \"unavailable\"}")
-print(f"Modules: {value[\"modules\"][\"approved_count\"]} approved; {value[\"modules\"][\"pending_licensing_approvals\"]} licensing approvals pending")
-print(f"Qualification: {value[\"qualification\"].get(\"status\", \"not_run\")}")
-print(f"Doctor: {value[\"doctor\"].get(\"status\", \"not_run\")}")
-print(f"Repository rollout: {value[\"repository_rollout\"][\"status\"]}")
+print("Flywheel: {}".format(value["readiness"]))
+print("VM: {} ({})".format(value["vm"]["name"], value["vm"]["status"]))
+print("Source: {}".format(value["source"]["head"] or "unavailable"))
+print("Modules: {} approved; {} licensing approvals pending".format(
+    value["modules"]["approved_count"],
+    value["modules"]["pending_licensing_approvals"],
+))
+print("Qualification: {}".format(value["qualification"].get("status", "not_run")))
+print("Doctor: {}".format(value["doctor"].get("status", "not_run")))
+print("Repository rollout: {}".format(value["repository_rollout"]["status"]))
 for blocker in value["blockers"]:
-    print(f"Blocker [{blocker[\"scope\"]}]: {blocker[\"code\"]} -> {blocker[\"next_command\"]}")
+    print("Blocker [{}]: {} -> {}".format(
+        blocker["scope"],
+        blocker["code"],
+        blocker["next_command"],
+    ))
 ' "$status_json"
     fi
     python3 -c 'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1])["readiness"] == "ready" else 1)' "$status_json"
