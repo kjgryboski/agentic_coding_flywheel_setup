@@ -1462,67 +1462,138 @@ acfs_generated_install_stack_jeffreysprompts() {
             local verified_installer_file=""
             local verified_installer_chmod_bin=""
 
-                # Cleared per attempt so a stale reason from an earlier module can
-                # never be misattributed to this one.
-                ACFS_LAST_MODULE_FAILURE_REASON=""
-            if acfs_security_init; then
-                local known_installers_decl=""
-                # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
-                known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
-                if [[ "$known_installers_decl" == declare\ -A* ]]; then
-                    local tool="jfp"
-                    local url=""
-                    local expected_sha256=""
+            # JeffreysPrompts has no immutable executable installer at the approved
+            # revision. Build its exact Rust workspace revision on Linux ARM64.
+            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]] && { [[ "$(uname -m 2>/dev/null)" == "aarch64" ]] || [[ "$(uname -m 2>/dev/null)" == "arm64" ]]; }; then
+                local jfp_source_repo="https://github.com/Dicklesworthstone/jeffreysprompts.com.git"
+                local jfp_source_commit="2cec2d5257ef0da32a856b51673f243b6c72a3e2"
+                local jfp_source_tree="79fc4e85f86a6e1e809e212004a4cc848e1d19ee"
+                local jfp_cargo_lock_sha256="d17941a5a85c4f4eda4f4cb070125ebf6b1af7e403846e6b35915c6d95f25c9d"
+                local jfp_cargo_toml_sha256="c902d565b250385fe4619cad99a5d68f923355c6833735d730f5a5979254378f"
+                local jfp_source_parent="$TARGET_HOME/.cache/acfs/source-builds"
+                local jfp_source_dir=""
+                local jfp_binary=""
+                local jfp_version=""
+                local jfp_git_bin=""
+                local jfp_mkdir_bin=""
+                local jfp_mktemp_bin=""
+                local jfp_rm_bin=""
+                local jfp_sha256sum_bin=""
+                local jfp_cargo_bin="$TARGET_HOME/.cargo/bin/cargo"
 
-                    # Safe access with explicit empty default
-                    url="${KNOWN_INSTALLERS[$tool]:-}"
-                    if ! expected_sha256="$(get_checksum "$tool")"; then
-                        log_error "stack.jeffreysprompts: get_checksum failed for tool '$tool'"
-                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        expected_sha256=""
-                    fi
+                jfp_git_bin="$(acfs_generated_system_binary_path git 2>/dev/null || true)"
+                jfp_mkdir_bin="$(acfs_generated_system_binary_path mkdir 2>/dev/null || true)"
+                jfp_mktemp_bin="$(acfs_generated_system_binary_path mktemp 2>/dev/null || true)"
+                jfp_rm_bin="$(acfs_generated_system_binary_path rm 2>/dev/null || true)"
+                jfp_sha256sum_bin="$(acfs_generated_system_binary_path sha256sum 2>/dev/null || true)"
 
-                    if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
-                        if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
-                            log_error "stack.jeffreysprompts: failed to create verified installer staging file"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                            verified_installer_file=""
-                        elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
-                            log_error "stack.jeffreysprompts: installer verification failed"
-                            : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
-                        elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
-                            log_error "stack.jeffreysprompts: trusted chmod not found for verified installer staging"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
-                            log_error "stack.jeffreysprompts: failed to make verified installer staging file read-only"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'bash' "$verified_installer_file"; then
-                            install_success=true
-                        else
-                            log_error "stack.jeffreysprompts: verified installer execution failed"
-                            ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
-                        fi
-                    else
-                        if [[ -z "$url" ]]; then
-                            log_error "stack.jeffreysprompts: KNOWN_INSTALLERS[$tool] not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                        if [[ -z "$expected_sha256" ]]; then
-                            log_error "stack.jeffreysprompts: checksum for '$tool' not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                    fi
-                else
-                    log_error "stack.jeffreysprompts: KNOWN_INSTALLERS array not available"
+                if [[ -z "$jfp_git_bin" || -z "$jfp_mkdir_bin" || -z "$jfp_mktemp_bin" || -z "$jfp_rm_bin" || -z "$jfp_sha256sum_bin" || ! -x "$jfp_cargo_bin" ]]; then
+                    log_error "stack.jeffreysprompts: exact source build prerequisites are unavailable"
                     ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$jfp_source_parent" ]]; then
+                    log_error "stack.jeffreysprompts: refusing source build through an invalid or symlinked target-home path"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif ! run_as_target "$jfp_mkdir_bin" -p "$jfp_source_parent"; then
+                    log_error "stack.jeffreysprompts: failed to prepare the confined source-build directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif [[ ! -d "$jfp_source_parent" || -L "$jfp_source_parent" ]]; then
+                    log_error "stack.jeffreysprompts: source-build directory is not a confined real directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif ! jfp_source_dir="$(run_as_target "$jfp_mktemp_bin" -d "$jfp_source_parent/jfp.XXXXXX" 2>/dev/null)"; then
+                    log_error "stack.jeffreysprompts: failed to create the source-build staging directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif [[ "$jfp_source_dir" != "$jfp_source_parent"/jfp.* || ! -d "$jfp_source_dir" || -L "$jfp_source_dir" ]]; then
+                    log_error "stack.jeffreysprompts: source-build staging directory escaped its trusted template"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif (
+                    set -euo pipefail
+                    trap 'run_as_target "$jfp_rm_bin" -rf -- "$jfp_source_dir" >/dev/null 2>&1 || true' EXIT
+                    run_as_target "$jfp_git_bin" -c core.hooksPath=/dev/null clone --filter=blob:none --no-checkout "$jfp_source_repo" "$jfp_source_dir/src"
+                    run_as_target "$jfp_git_bin" -C "$jfp_source_dir/src" -c core.hooksPath=/dev/null fetch --depth 1 origin "$jfp_source_commit"
+                    run_as_target "$jfp_git_bin" -C "$jfp_source_dir/src" -c core.hooksPath=/dev/null checkout --detach "$jfp_source_commit"
+                    [[ "$(run_as_target "$jfp_git_bin" -C "$jfp_source_dir/src" rev-parse HEAD)" == "$jfp_source_commit" ]]
+                    [[ "$(run_as_target "$jfp_git_bin" -C "$jfp_source_dir/src" rev-parse "HEAD^{tree}")" == "$jfp_source_tree" ]]
+                    [[ "$(run_as_target "$jfp_sha256sum_bin" "$jfp_source_dir/src/Cargo.lock" | awk 'NR == 1 { print $1 }')" == "$jfp_cargo_lock_sha256" ]]
+                    [[ "$(run_as_target "$jfp_sha256sum_bin" "$jfp_source_dir/src/Cargo.toml" | awk 'NR == 1 { print $1 }')" == "$jfp_cargo_toml_sha256" ]]
+                    [[ -z "$(run_as_target "$jfp_git_bin" -C "$jfp_source_dir/src" status --porcelain=v1 --untracked-files=all)" ]]
+                    run_as_target env CARGO_NET_GIT_FETCH_WITH_CLI=true "$jfp_cargo_bin" build --release --locked --bin jfp --manifest-path "$jfp_source_dir/src/Cargo.toml" --target-dir "$jfp_source_dir/target"
+                    jfp_binary="$jfp_source_dir/target/release/jfp"
+                    [[ -f "$jfp_binary" && -x "$jfp_binary" && ! -L "$jfp_binary" ]]
+                    jfp_version="$(run_as_target "$jfp_binary" --version 2>/dev/null)"
+                    [[ "$jfp_version" == "jfp 0.1.0" ]]
+                    acfs_install_executable_into_primary_bin "$jfp_binary" jfp
+                ); then
+                    install_success=true
+                else
+                    if [[ -n "$jfp_source_dir" && "$jfp_source_dir" == "$jfp_source_parent"/jfp.* && -d "$jfp_source_dir" && ! -L "$jfp_source_dir" ]]; then
+                        run_as_target "$jfp_rm_bin" -rf -- "$jfp_source_dir" >/dev/null 2>&1 || true
+                    fi
+                    log_error "stack.jeffreysprompts: exact source build failed"
+                    ACFS_LAST_MODULE_FAILURE_REASON="source build"
                 fi
             else
-                log_error "stack.jeffreysprompts: acfs_security_init failed - check security.sh and checksums.yaml"
-                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-            fi
-            if [[ -n "$verified_installer_file" ]]; then
-                _acfs_remove_temp_files "$verified_installer_file"
-                verified_installer_file=""
+                    # Cleared per attempt so a stale reason from an earlier module can
+                    # never be misattributed to this one.
+                    ACFS_LAST_MODULE_FAILURE_REASON=""
+                if acfs_security_init; then
+                    local known_installers_decl=""
+                    # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
+                    known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
+                    if [[ "$known_installers_decl" == declare\ -A* ]]; then
+                        local tool="jfp"
+                        local url=""
+                        local expected_sha256=""
+
+                        # Safe access with explicit empty default
+                        url="${KNOWN_INSTALLERS[$tool]:-}"
+                        if ! expected_sha256="$(get_checksum "$tool")"; then
+                            log_error "stack.jeffreysprompts: get_checksum failed for tool '$tool'"
+                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                            expected_sha256=""
+                        fi
+
+                        if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
+                            if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
+                                log_error "stack.jeffreysprompts: failed to create verified installer staging file"
+                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                                verified_installer_file=""
+                            elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
+                                log_error "stack.jeffreysprompts: installer verification failed"
+                                : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
+                            elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
+                                log_error "stack.jeffreysprompts: trusted chmod not found for verified installer staging"
+                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                            elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
+                                log_error "stack.jeffreysprompts: failed to make verified installer staging file read-only"
+                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                            elif run_as_target_runner 'bash' "$verified_installer_file"; then
+                                install_success=true
+                            else
+                                log_error "stack.jeffreysprompts: verified installer execution failed"
+                                ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
+                            fi
+                        else
+                            if [[ -z "$url" ]]; then
+                                log_error "stack.jeffreysprompts: KNOWN_INSTALLERS[$tool] not found"
+                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                            fi
+                            if [[ -z "$expected_sha256" ]]; then
+                                log_error "stack.jeffreysprompts: checksum for '$tool' not found"
+                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                            fi
+                        fi
+                    else
+                        log_error "stack.jeffreysprompts: KNOWN_INSTALLERS array not available"
+                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                    fi
+                else
+                    log_error "stack.jeffreysprompts: acfs_security_init failed - check security.sh and checksums.yaml"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                fi
+                if [[ -n "$verified_installer_file" ]]; then
+                    _acfs_remove_temp_files "$verified_installer_file"
+                    verified_installer_file=""
+                fi
             fi
 
             # Verified install is required - no fallback
@@ -2700,7 +2771,7 @@ acfs_generated_install_stack_caam() {
                         elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
                             log_error "stack.caam: failed to make verified installer staging file read-only"
                             ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'bash' "$verified_installer_file"; then
+                        elif run_as_target_runner 'env' 'NONINTERACTIVE=1' 'bash' "$verified_installer_file"; then
                             install_success=true
                         else
                             log_error "stack.caam: verified installer execution failed"
@@ -2836,7 +2907,7 @@ acfs_generated_install_stack_slb() {
                         elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
                             log_error "stack.slb: failed to make verified installer staging file read-only"
                             ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'bash' "$verified_installer_file"; then
+                        elif run_as_target_runner 'env' 'INSTALL_DIR='"$TARGET_HOME"'/.local/bin' 'bash' "$verified_installer_file"; then
                             install_success=true
                         else
                             log_error "stack.slb: verified installer execution failed"
@@ -4879,67 +4950,143 @@ acfs_generated_install_stack_eidetic_engine_cli() {
             local verified_installer_file=""
             local verified_installer_chmod_bin=""
 
-                # Cleared per attempt so a stale reason from an earlier module can
-                # never be misattributed to this one.
-                ACFS_LAST_MODULE_FAILURE_REASON=""
-            if acfs_security_init; then
-                local known_installers_decl=""
-                # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
-                known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
-                if [[ "$known_installers_decl" == declare\ -A* ]]; then
-                    local tool="ee"
-                    local url=""
-                    local expected_sha256=""
+            # Eidetic Engine release binaries require a newer glibc than Ubuntu
+            # 24.04 on ARM64. Build the approved source and its locked siblings.
+            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]] && { [[ "$(uname -m 2>/dev/null)" == "aarch64" ]] || [[ "$(uname -m 2>/dev/null)" == "arm64" ]]; }; then
+                local ee_source_repo="https://github.com/Dicklesworthstone/eidetic_engine_cli.git"
+                local ee_source_commit="0fc6801c91edc0764cf405b049024a25c3199e09"
+                local ee_source_tree="179ac1bb86320f3874b34cec1cbcca2b85c7eadf"
+                local ee_cargo_lock_sha256="d4a9012264d98026a6e2fd85a04b2ff3c85e636ebdcfb970f310a9f0421004cc"
+                local ee_cargo_toml_sha256="2ae5549883ab45efca3f7eadd62130f24a4ff29f1c6216475dfa615646006598"
+                local ee_stack_lock_sha256="9b649eff8925fd22d980e7bbddd7ff479ff6318c14f141fe9a8343b7a4db2738"
+                local ee_checkout_sha256="a0f5041e4c13ba6faeb23df1e25ce3dc693c96dd9b2667d9d351e82e0dccde3c"
+                local ee_source_parent="$TARGET_HOME/.cache/acfs/source-builds"
+                local ee_source_dir=""
+                local ee_binary=""
+                local ee_version=""
+                local ee_git_bin=""
+                local ee_mkdir_bin=""
+                local ee_mktemp_bin=""
+                local ee_rm_bin=""
+                local ee_sha256sum_bin=""
+                local ee_cargo_bin="$TARGET_HOME/.cargo/bin/cargo"
 
-                    # Safe access with explicit empty default
-                    url="${KNOWN_INSTALLERS[$tool]:-}"
-                    if ! expected_sha256="$(get_checksum "$tool")"; then
-                        log_error "stack.eidetic_engine_cli: get_checksum failed for tool '$tool'"
-                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        expected_sha256=""
-                    fi
+                ee_git_bin="$(acfs_generated_system_binary_path git 2>/dev/null || true)"
+                ee_mkdir_bin="$(acfs_generated_system_binary_path mkdir 2>/dev/null || true)"
+                ee_mktemp_bin="$(acfs_generated_system_binary_path mktemp 2>/dev/null || true)"
+                ee_rm_bin="$(acfs_generated_system_binary_path rm 2>/dev/null || true)"
+                ee_sha256sum_bin="$(acfs_generated_system_binary_path sha256sum 2>/dev/null || true)"
 
-                    if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
-                        if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
-                            log_error "stack.eidetic_engine_cli: failed to create verified installer staging file"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                            verified_installer_file=""
-                        elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
-                            log_error "stack.eidetic_engine_cli: installer verification failed"
-                            : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
-                        elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
-                            log_error "stack.eidetic_engine_cli: trusted chmod not found for verified installer staging"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
-                            log_error "stack.eidetic_engine_cli: failed to make verified installer staging file read-only"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'bash' "$verified_installer_file" '--easy-mode'; then
-                            install_success=true
-                        else
-                            log_error "stack.eidetic_engine_cli: verified installer execution failed"
-                            ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
-                        fi
-                    else
-                        if [[ -z "$url" ]]; then
-                            log_error "stack.eidetic_engine_cli: KNOWN_INSTALLERS[$tool] not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                        if [[ -z "$expected_sha256" ]]; then
-                            log_error "stack.eidetic_engine_cli: checksum for '$tool' not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                    fi
-                else
-                    log_error "stack.eidetic_engine_cli: KNOWN_INSTALLERS array not available"
+                if [[ -z "$ee_git_bin" || -z "$ee_mkdir_bin" || -z "$ee_mktemp_bin" || -z "$ee_rm_bin" || -z "$ee_sha256sum_bin" || ! -x "$ee_cargo_bin" ]]; then
+                    log_error "stack.eidetic_engine_cli: exact source build prerequisites are unavailable"
                     ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$ee_source_parent" ]]; then
+                    log_error "stack.eidetic_engine_cli: refusing source build through an invalid or symlinked target-home path"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif ! run_as_target "$ee_mkdir_bin" -p "$ee_source_parent"; then
+                    log_error "stack.eidetic_engine_cli: failed to prepare the confined source-build directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif [[ ! -d "$ee_source_parent" || -L "$ee_source_parent" ]]; then
+                    log_error "stack.eidetic_engine_cli: source-build directory is not a confined real directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif ! ee_source_dir="$(run_as_target "$ee_mktemp_bin" -d "$ee_source_parent/eidetic-engine.XXXXXX" 2>/dev/null)"; then
+                    log_error "stack.eidetic_engine_cli: failed to create the source-build staging directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif [[ "$ee_source_dir" != "$ee_source_parent"/eidetic-engine.* || ! -d "$ee_source_dir" || -L "$ee_source_dir" ]]; then
+                    log_error "stack.eidetic_engine_cli: source-build staging directory escaped its trusted template"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif (
+                    set -euo pipefail
+                    trap 'run_as_target "$ee_rm_bin" -rf -- "$ee_source_dir" >/dev/null 2>&1 || true' EXIT
+                    run_as_target "$ee_git_bin" -c core.hooksPath=/dev/null clone --filter=blob:none --no-checkout "$ee_source_repo" "$ee_source_dir/eidetic_engine_cli"
+                    run_as_target "$ee_git_bin" -C "$ee_source_dir/eidetic_engine_cli" -c core.hooksPath=/dev/null fetch --depth 1 origin "$ee_source_commit"
+                    run_as_target "$ee_git_bin" -C "$ee_source_dir/eidetic_engine_cli" -c core.hooksPath=/dev/null checkout --detach "$ee_source_commit"
+                    [[ "$(run_as_target "$ee_git_bin" -C "$ee_source_dir/eidetic_engine_cli" rev-parse HEAD)" == "$ee_source_commit" ]]
+                    [[ "$(run_as_target "$ee_git_bin" -C "$ee_source_dir/eidetic_engine_cli" rev-parse "HEAD^{tree}")" == "$ee_source_tree" ]]
+                    [[ "$(run_as_target "$ee_sha256sum_bin" "$ee_source_dir/eidetic_engine_cli/Cargo.lock" | awk 'NR == 1 { print $1 }')" == "$ee_cargo_lock_sha256" ]]
+                    [[ "$(run_as_target "$ee_sha256sum_bin" "$ee_source_dir/eidetic_engine_cli/Cargo.toml" | awk 'NR == 1 { print $1 }')" == "$ee_cargo_toml_sha256" ]]
+                    [[ "$(run_as_target "$ee_sha256sum_bin" "$ee_source_dir/eidetic_engine_cli/franken-stack.lock" | awk 'NR == 1 { print $1 }')" == "$ee_stack_lock_sha256" ]]
+                    [[ "$(run_as_target "$ee_sha256sum_bin" "$ee_source_dir/eidetic_engine_cli/scripts/checkout-franken-stack.sh" | awk 'NR == 1 { print $1 }')" == "$ee_checkout_sha256" ]]
+                    [[ -z "$(run_as_target "$ee_git_bin" -C "$ee_source_dir/eidetic_engine_cli" status --porcelain=v1 --untracked-files=all)" ]]
+                    run_as_target env PATH="$TARGET_HOME/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" bash "$ee_source_dir/eidetic_engine_cli/scripts/checkout-franken-stack.sh" "$ee_source_dir"
+                    run_as_target env CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" build --release --locked --bin ee --manifest-path "$ee_source_dir/eidetic_engine_cli/Cargo.toml" --target-dir "$ee_source_dir/target"
+                    ee_binary="$ee_source_dir/target/release/ee"
+                    [[ -f "$ee_binary" && -x "$ee_binary" && ! -L "$ee_binary" ]]
+                    ee_version="$(run_as_target "$ee_binary" --version 2>/dev/null)"
+                    [[ "$ee_version" == "ee 0.14.2" ]]
+                    acfs_install_executable_into_primary_bin "$ee_binary" ee
+                ); then
+                    install_success=true
+                else
+                    if [[ -n "$ee_source_dir" && "$ee_source_dir" == "$ee_source_parent"/eidetic-engine.* && -d "$ee_source_dir" && ! -L "$ee_source_dir" ]]; then
+                        run_as_target "$ee_rm_bin" -rf -- "$ee_source_dir" >/dev/null 2>&1 || true
+                    fi
+                    log_error "stack.eidetic_engine_cli: exact source build failed"
+                    ACFS_LAST_MODULE_FAILURE_REASON="source build"
                 fi
             else
-                log_error "stack.eidetic_engine_cli: acfs_security_init failed - check security.sh and checksums.yaml"
-                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-            fi
-            if [[ -n "$verified_installer_file" ]]; then
-                _acfs_remove_temp_files "$verified_installer_file"
-                verified_installer_file=""
+                    # Cleared per attempt so a stale reason from an earlier module can
+                    # never be misattributed to this one.
+                    ACFS_LAST_MODULE_FAILURE_REASON=""
+                if acfs_security_init; then
+                    local known_installers_decl=""
+                    # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
+                    known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
+                    if [[ "$known_installers_decl" == declare\ -A* ]]; then
+                        local tool="ee"
+                        local url=""
+                        local expected_sha256=""
+
+                        # Safe access with explicit empty default
+                        url="${KNOWN_INSTALLERS[$tool]:-}"
+                        if ! expected_sha256="$(get_checksum "$tool")"; then
+                            log_error "stack.eidetic_engine_cli: get_checksum failed for tool '$tool'"
+                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                            expected_sha256=""
+                        fi
+
+                        if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
+                            if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
+                                log_error "stack.eidetic_engine_cli: failed to create verified installer staging file"
+                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                                verified_installer_file=""
+                            elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
+                                log_error "stack.eidetic_engine_cli: installer verification failed"
+                                : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
+                            elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
+                                log_error "stack.eidetic_engine_cli: trusted chmod not found for verified installer staging"
+                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                            elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
+                                log_error "stack.eidetic_engine_cli: failed to make verified installer staging file read-only"
+                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                            elif run_as_target_runner 'bash' "$verified_installer_file" '--easy-mode'; then
+                                install_success=true
+                            else
+                                log_error "stack.eidetic_engine_cli: verified installer execution failed"
+                                ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
+                            fi
+                        else
+                            if [[ -z "$url" ]]; then
+                                log_error "stack.eidetic_engine_cli: KNOWN_INSTALLERS[$tool] not found"
+                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                            fi
+                            if [[ -z "$expected_sha256" ]]; then
+                                log_error "stack.eidetic_engine_cli: checksum for '$tool' not found"
+                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                            fi
+                        fi
+                    else
+                        log_error "stack.eidetic_engine_cli: KNOWN_INSTALLERS array not available"
+                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                    fi
+                else
+                    log_error "stack.eidetic_engine_cli: acfs_security_init failed - check security.sh and checksums.yaml"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                fi
+                if [[ -n "$verified_installer_file" ]]; then
+                    _acfs_remove_temp_files "$verified_installer_file"
+                    verified_installer_file=""
+                fi
             fi
 
             # Verified install is required - no fallback

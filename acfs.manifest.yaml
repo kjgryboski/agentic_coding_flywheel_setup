@@ -2187,7 +2187,7 @@ modules:
       cli_name: "jfp"
     installed_check:
       run_as: target_user
-      command: "command -v jfp"
+      command: 'test "$(jfp --version 2>/dev/null)" = "jfp 0.1.0"'
     verified_installer:
       tool: jfp
       runner: bash
@@ -2195,6 +2195,10 @@ modules:
     verify:
       - jfp --version
       - jfp doctor || true
+    notes:
+      - "linux_arm64_source_commit=2cec2d5257ef0da32a856b51673f243b6c72a3e2"
+      - "linux_arm64_source_tree=79fc4e85f86a6e1e809e212004a4cc848e1d19ee"
+      - "linux_arm64_cargo_lock_sha256=d17941a5a85c4f4eda4f4cb070125ebf6b1af7e403846e6b35915c6d95f25c9d"
 
   - id: stack.process_triage
     description: Find and terminate stuck/zombie processes with intelligent scoring (pt)
@@ -2234,7 +2238,7 @@ modules:
     verified_installer:
       tool: pt
       runner: bash
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/process_triage/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/process_triage/7f455d51e5857c245a72cdea29a1ad84b1d942ad/install.sh"
     install: []
     verify:
       - pt --help
@@ -2658,6 +2662,7 @@ modules:
     verified_installer:
       tool: caam
       runner: bash
+      env: ["NONINTERACTIVE=1"]
     install: []
     verify:
       - caam status || caam --help
@@ -2694,10 +2699,11 @@ modules:
       - lang.go
     installed_check:
       run_as: target_user
-      command: "command -v slb"
+      command: 'test -x "$HOME/.local/bin/slb"'
     verified_installer:
       tool: slb
       runner: bash
+      env: ["INSTALL_DIR=$TARGET_HOME/.local/bin"]
     install: []
     verify:
       # Use 'slb' alone (shows quick reference) since --help may have exit code issues
@@ -2830,7 +2836,7 @@ modules:
     verified_installer:
       tool: ru
       runner: bash
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/repo_updater/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/repo_updater/72d8c6da4008a08480d7ef2e66fc165969248400/install.sh"
       env: ["RU_NON_INTERACTIVE=1"]
     install: []
     verify:
@@ -2873,7 +2879,7 @@ modules:
     verified_installer:
       tool: brenner_bot
       runner: bash
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/brenner_bot/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/brenner_bot/34a59a89846d14d7504523041eff960d2d80e434/install.sh"
       args: ["--", "--skip-cass"]
     install: []
     verify:
@@ -2917,7 +2923,7 @@ modules:
     verified_installer:
       tool: rch
       runner: bash
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/remote_compilation_helper/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/remote_compilation_helper/0a982fdee2ca5ce26791dd17b83285916a7b97f6/install.sh"
       args: ["--easy-mode"]
     install: []
     verify:
@@ -3058,7 +3064,7 @@ modules:
       tool: fsfs
       runner: bash
       args: ["--easy-mode"]
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/frankensearch/refs/heads/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/frankensearch/22859f74056c31fd3a713bacecd4a1f22f0cf82d/install.sh"
     install: []
     verify:
       - fsfs version || fsfs --help
@@ -3101,7 +3107,7 @@ modules:
     verified_installer:
       tool: sbh
       runner: bash
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/storage_ballast_helper/main/scripts/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/storage_ballast_helper/587c332962883d1fff40a183c2d0fb0ef615cfe6/scripts/install.sh"
     install: []
     verify:
       - command -v sbh
@@ -3144,7 +3150,7 @@ modules:
     verified_installer:
       tool: casr
       runner: bash
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/cross_agent_session_resumer/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/cross_agent_session_resumer/37af44abc16a38c76990b25b163fe42e0d7fffd1/install.sh"
     install: []
     verify:
       - casr providers || casr --help
@@ -3188,7 +3194,7 @@ modules:
       tool: dsr
       runner: bash
       args: ["--easy-mode"]
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/doodlestein_self_releaser/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/doodlestein_self_releaser/e10233a5dfb49b014ecb54b204af4cb553d58741/install.sh"
     install: []
     verify:
       - dsr --version || dsr --help
@@ -3231,7 +3237,7 @@ modules:
     verified_installer:
       tool: asb
       runner: bash
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/agent_settings_backup_script/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/agent_settings_backup_script/7a060386c06d50b7f4c1440fd1da15b2ee447bc4/install.sh"
     install:
       - |
         backup_root="${ASB_BACKUP_ROOT:-$HOME/.agent_settings_backups}"
@@ -3364,7 +3370,7 @@ modules:
       tool: pcr
       runner: bash
       args: ["--yes"]
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/post_compact_reminder/main/install-post-compact-reminder.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/post_compact_reminder/c1f4811323dbf826fbf646dd85640b664fe6666b/install-post-compact-reminder.sh"
     install: []
     verify:
       - |
@@ -3448,15 +3454,20 @@ modules:
       - lang.rust
     installed_check:
       run_as: target_user
-      command: "command -v ee"
+      command: 'test "$(ee --version 2>/dev/null)" = "ee 0.14.2"'
     verified_installer:
       tool: ee
       runner: bash
       args: ["--easy-mode"]
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/eidetic_engine_cli/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/eidetic_engine_cli/0fc6801c91edc0764cf405b049024a25c3199e09/install.sh"
     install: []
     verify:
       - ee --version || ee --help
+    notes:
+      - "linux_arm64_source_commit=0fc6801c91edc0764cf405b049024a25c3199e09"
+      - "linux_arm64_source_tree=179ac1bb86320f3874b34cec1cbcca2b85c7eadf"
+      - "linux_arm64_cargo_lock_sha256=d4a9012264d98026a6e2fd85a04b2ff3c85e636ebdcfb970f310a9f0421004cc"
+      - "linux_arm64_franken_stack_lock_sha256=9b649eff8925fd22d980e7bbddd7ff479ff6318c14f141fe9a8343b7a4db2738"
 
   - id: stack.franken_markdown
     description: Pure-Rust Markdown engine rendering self-contained HTML and tagged PDF (fmd)
@@ -3497,7 +3508,7 @@ modules:
       tool: fmd
       runner: bash
       args: ["--easy-mode"]
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/franken_markdown/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/franken_markdown/5637bad86e3c0deacab6411a734715015b143a12/install.sh"
     install: []
     verify:
       - fmd --version || fmd --help
@@ -3541,7 +3552,7 @@ modules:
       tool: pi
       runner: bash
       args: ["--yes", "--easy-mode"]
-      url: "https://raw.githubusercontent.com/Dicklesworthstone/pi_agent_rust/main/install.sh"
+      url: "https://raw.githubusercontent.com/Dicklesworthstone/pi_agent_rust/e23c4622f8bc4038a5e061ee3640a0e9206ec5cc/install.sh"
     install: []
     verify:
       - pi --version || pi --help

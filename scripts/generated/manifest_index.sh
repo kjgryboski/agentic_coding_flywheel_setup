@@ -6,7 +6,7 @@
 # ============================================================
 # Data-only manifest index. Safe to source.
 
-ACFS_MANIFEST_SHA256="61fed87a0aa299fc6e6c657afb23845ec46137392393d0113e8d11b50b7dda65"
+ACFS_MANIFEST_SHA256="146a55d57069f151ecf17e3549350501022888f66b097ecea49eb84795b9bf8a"
 
 ACFS_MODULES_IN_ORDER=(
   "base.system"
@@ -750,7 +750,7 @@ declare -gA ACFS_MODULE_INSTALLED_CHECK=(
   ['stack.mcp_agent_mail']="false"
   ['stack.meta_skill']="command -v ms"
   ['stack.automated_plan_reviser']="command -v apr"
-  ['stack.jeffreysprompts']="command -v jfp"
+  ['stack.jeffreysprompts']="test \"\$(jfp --version 2>/dev/null)\" = \"jfp 0.1.0\""
   ['stack.process_triage']="command -v pt"
   ['stack.ultimate_bug_scanner']="command -v ubs"
   ['stack.beads_rust']="false"
@@ -758,7 +758,7 @@ declare -gA ACFS_MODULE_INSTALLED_CHECK=(
   ['stack.cass']="command -v cass"
   ['stack.cm']="command -v cm"
   ['stack.caam']="command -v caam"
-  ['stack.slb']="command -v slb"
+  ['stack.slb']="test -x \"\$HOME/.local/bin/slb\""
   ['stack.dcg']="command -v dcg"
   ['stack.ru']="command -v ru"
   ['stack.brenner_bot']="command -v brenner"
@@ -771,7 +771,7 @@ declare -gA ACFS_MODULE_INSTALLED_CHECK=(
   ['stack.doodlestein_self_releaser']="command -v dsr"
   ['stack.agent_settings_backup']="command -v asb"
   ['stack.pcr']="claude_settings_has_command_hook() {   local settings_file=\"\${1:-}\"   local command_pattern=\"\${2:-}\"   local jq_bin=\"\"    [[ -n \"\$settings_file\" && -n \"\$command_pattern\" ]] || return 1   [[ -f \"\$settings_file\" ]] || return 1   for jq_bin in /usr/bin/jq /bin/jq /usr/local/bin/jq /usr/local/sbin/jq /usr/sbin/jq /sbin/jq; do     [[ -x \"\$jq_bin\" ]] && break   done   [[ -x \"\$jq_bin\" ]] || return 1    \"\$jq_bin\" -e --arg pattern \"\$command_pattern\" '     def command_hook_matches:       type == \"object\"       and ((.type? // \"command\") == \"command\")       and ((.command? // \"\") | strings | test(\$pattern));     def event_entry_matches:       if type == \"object\" and (.hooks? | type) == \"array\" then         any(.hooks[]?; command_hook_matches)       else         command_hook_matches       end;     def hook_event_entries:       if (.hooks? | type) == \"object\" then         .hooks | to_entries[]? | .value | arrays | .[]?       elif (.hooks? | type) == \"array\" then         .hooks[]?       else         empty       end;     any(hook_event_entries; event_entry_matches)   ' \"\$settings_file\" >/dev/null 2>&1 }  target_home=\"\${TARGET_HOME:-\$HOME}\" hook_script=\"\$target_home/.local/bin/claude-post-compact-reminder\" settings=\"\$target_home/.claude/settings.json\" alt_settings=\"\$target_home/.config/claude/settings.json\" pcr_command_pattern='(^|[[:space:]/])claude-post-compact-reminder([[:space:]]|\$)'  test -x \"\$hook_script\" || exit 1  claude_settings_has_command_hook \"\$settings\" \"\$pcr_command_pattern\" ||   claude_settings_has_command_hook \"\$alt_settings\" \"\$pcr_command_pattern\" "
-  ['stack.eidetic_engine_cli']="command -v ee"
+  ['stack.eidetic_engine_cli']="test \"\$(ee --version 2>/dev/null)\" = \"ee 0.14.2\""
   ['stack.franken_markdown']="command -v fmd"
   ['stack.pi_agent_rust']="command -v pi"
   ['stack.power_failure_resumer']="command -v pfr"

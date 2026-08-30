@@ -658,6 +658,29 @@ describe('Generated verified installer args', () => {
     expect(stackContent).not.toContain('cargo install --git https://github.com/Dicklesworthstone/meta_skill');
   });
 
+  test('stack.jeffreysprompts uses its exact locked Rust source on Linux ARM64', () => {
+    const stackContent = readFileSync(resolve(GENERATED_DIR, 'install_stack.sh'), 'utf-8');
+
+    expect(stackContent).toContain('jfp_source_commit="2cec2d5257ef0da32a856b51673f243b6c72a3e2"');
+    expect(stackContent).toContain('jfp_source_tree="79fc4e85f86a6e1e809e212004a4cc848e1d19ee"');
+    expect(stackContent).toContain('jfp_cargo_lock_sha256="d17941a5a85c4f4eda4f4cb070125ebf6b1af7e403846e6b35915c6d95f25c9d"');
+    expect(stackContent).toContain('build --release --locked --bin jfp');
+    expect(stackContent).toContain('[[ "$jfp_version" == "jfp 0.1.0" ]]');
+    expect(stackContent).toContain('acfs_install_executable_into_primary_bin "$jfp_binary" jfp');
+  });
+
+  test('stack.eidetic_engine_cli builds the exact locked Franken stack on Linux ARM64', () => {
+    const stackContent = readFileSync(resolve(GENERATED_DIR, 'install_stack.sh'), 'utf-8');
+
+    expect(stackContent).toContain('ee_source_commit="0fc6801c91edc0764cf405b049024a25c3199e09"');
+    expect(stackContent).toContain('ee_source_tree="179ac1bb86320f3874b34cec1cbcca2b85c7eadf"');
+    expect(stackContent).toContain('ee_stack_lock_sha256="9b649eff8925fd22d980e7bbddd7ff479ff6318c14f141fe9a8343b7a4db2738"');
+    expect(stackContent).toContain('scripts/checkout-franken-stack.sh" "$ee_source_dir"');
+    expect(stackContent).toContain('build --release --locked --bin ee');
+    expect(stackContent).toContain('[[ "$ee_version" == "ee 0.14.2" ]]');
+    expect(stackContent).toContain('acfs_install_executable_into_primary_bin "$ee_binary" ee');
+  });
+
   test('stack.frankensearch selects lite Linux release artifacts', () => {
     const stackPath = resolve(GENERATED_DIR, 'install_stack.sh');
     expect(existsSync(stackPath)).toBe(true);
@@ -694,9 +717,20 @@ describe('Generated verified installer args', () => {
     expect(nextModule).toBeGreaterThan(slbStart);
     expect(slbContent).toContain('local tool="slb"');
     expect(slbContent).toContain('verify_checksum "$url" "$expected_sha256" "$tool"');
-    expect(slbContent).toContain(`run_as_target_runner 'bash' "$verified_installer_file"`);
+    expect(slbContent).toContain(`run_as_target_runner 'env' 'INSTALL_DIR='"$TARGET_HOME"'/.local/bin' 'bash' "$verified_installer_file"`);
     expect(slbContent).not.toContain('git clone');
     expect(slbContent).not.toContain('SLB_TMP');
+  });
+
+  test('stack.caam retains checksum verification and selects its documented noninteractive verification mode', () => {
+    const stackContent = readFileSync(resolve(GENERATED_DIR, 'install_stack.sh'), 'utf-8');
+    const caamStart = stackContent.indexOf('acfs_generated_install_stack_caam() {');
+    const nextModule = stackContent.indexOf('\nacfs_generated_install_stack_', caamStart + 1);
+    const caamContent = stackContent.slice(caamStart, nextModule);
+
+    expect(caamContent).toContain('verify_checksum "$url" "$expected_sha256" "$tool"');
+    expect(caamContent).toContain(`run_as_target_runner 'env' 'NONINTERACTIVE=1' 'bash' "$verified_installer_file"`);
+    expect(caamContent).not.toContain('CAAM_SKIP_VERIFY');
   });
 
   test('stack.pcr emits a pre-install Claude check before the verified installer', () => {
