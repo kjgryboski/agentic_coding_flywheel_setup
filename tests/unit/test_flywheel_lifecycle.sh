@@ -202,6 +202,42 @@ assert len(rollout["receipt_sha256"]) == 64
 assert [item["code"] for item in value["blockers"]] == ["live_rollout_not_proven"]
 ' "$rollout_json"
 
+python3 - "$TEST_ROOT/synthetic-pilot.json" <<'PY'
+import hashlib
+import json
+import sys
+
+value = {
+    "bookclub_eligible": True,
+    "external_mutation": False,
+    "git": {"clean": True, "head": "a" * 40, "tree": "b" * 40},
+    "qualification_scope": "synthetic-pilot-only",
+    "repository": "kjgryboski/ops-steward",
+    "schema": "ops-steward.github-admission-synthetic-pilot-receipt/v1",
+    "verdict": "PASS",
+}
+canonical = (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+value["receipt_sha256"] = hashlib.sha256(canonical).hexdigest()
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+PY
+synthetic_status_json="$("$REPO_ROOT/flywheel" status --json --rollout-receipt "$TEST_ROOT/synthetic-pilot.json")"
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+rollout=value["repository_rollout"]
+assert rollout["status"] == "evidence_connected"
+assert rollout["schema"] == "ops-steward.github-admission-synthetic-pilot-receipt/v1"
+assert rollout["declared_status"] == "pass"
+assert rollout["scope"] == "synthetic-pilot-only"
+assert rollout["repository"] == "kjgryboski/ops-steward"
+assert rollout["bookclub_eligible"] is True
+assert rollout["external_mutation"] is False
+assert rollout["git"]["clean"] is True
+assert [item["code"] for item in value["blockers"]] == ["live_rollout_not_proven"]
+' "$synthetic_status_json"
+
 ln -s "$TEST_ROOT/rollout.json" "$TEST_ROOT/rollout-link.json"
 linked_rollout_json="$("$REPO_ROOT/flywheel" status --json --rollout-receipt "$TEST_ROOT/rollout-link.json")"
 python3 -c '

@@ -445,6 +445,37 @@ if rollout_receipt_path:
                 "repository": value["repository"],
                 "bookclub_eligible": value["bookclub_eligible"],
             }
+        elif schema == "ops-steward.github-admission-synthetic-pilot-receipt/v1":
+            receipt_digest = value.get("receipt_sha256")
+            digest_source = dict(value)
+            digest_source.pop("receipt_sha256", None)
+            observed_receipt_digest = hashlib.sha256(
+                (json.dumps(digest_source, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+            ).hexdigest()
+            git = value.get("git")
+            if (
+                not isinstance(receipt_digest, str)
+                or receipt_digest != observed_receipt_digest
+                or value.get("verdict") not in {"PASS", "FAIL"}
+                or value.get("qualification_scope") != "synthetic-pilot-only"
+                or not isinstance(value.get("bookclub_eligible"), bool)
+                or value.get("external_mutation") is not False
+                or not isinstance(value.get("repository"), str)
+                or not isinstance(git, dict)
+                or git.get("clean") is not True
+            ):
+                raise ValueError("synthetic pilot receipt content binding is invalid")
+            rollout = {
+                "status": "evidence_connected",
+                "receipt_sha256": hashlib.sha256(raw).hexdigest(),
+                "schema": schema,
+                "declared_status": "pass" if value["verdict"] == "PASS" else "fail",
+                "scope": value["qualification_scope"],
+                "repository": value["repository"],
+                "bookclub_eligible": value["bookclub_eligible"],
+                "external_mutation": False,
+                "git": git,
+            }
         elif schema == "agent-flywheel.progressive-rollout-plan/v1":
             plan_digest = value.get("plan_sha256")
             digest_source = dict(value)
