@@ -286,6 +286,24 @@ assert rollout["live_rollout_eligible"] is False
 assert rollout["bookclub_eligible"] is None
 assert [item["code"] for item in value["blockers"]] == ["live_rollout_not_proven"]
 ' "$plan_status_json"
+python3 - "$TEST_ROOT/rollout-plan.json" "$TEST_ROOT/tampered-rollout-plan.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+value["repository_count"] = 2
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+PY
+tampered_plan_status_json="$("$REPO_ROOT/flywheel" status --json --rollout-receipt "$TEST_ROOT/tampered-rollout-plan.json")"
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["repository_rollout"]["status"] == "invalid"
+assert [item["code"] for item in value["blockers"]] == ["receipt_invalid"]
+' "$tampered_plan_status_json"
 
 typo_rc=0
 typo_error="$("$REPO_ROOT/flywheel" statsu 2>&1)" || typo_rc=$?
