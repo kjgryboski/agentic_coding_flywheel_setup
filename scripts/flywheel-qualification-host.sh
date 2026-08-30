@@ -143,8 +143,12 @@ fi
 
 swap_kib="$(read_meminfo_kib SwapTotal 2>/dev/null || true)"
 required_swap_kib=$((MIN_SWAP_GIB * 1024 * 1024))
-if [[ "$swap_kib" =~ ^[0-9]+$ ]] && ((swap_kib >= required_swap_kib)); then
-    record swap_total pass "$((swap_kib / 1024 / 1024)) GiB total"
+# Linux excludes a small mkswap header from /proc/meminfo. A provisioned
+# 8 GiB swapfile therefore reports a few KiB below 8 GiB of usable capacity.
+swap_metadata_tolerance_kib=1024
+if [[ "$swap_kib" =~ ^[0-9]+$ ]] \
+    && ((swap_kib + swap_metadata_tolerance_kib >= required_swap_kib)); then
+    record swap_total pass "$swap_kib KiB usable; ${MIN_SWAP_GIB} GiB provisioned threshold"
 else
     record swap_total fail "at least ${MIN_SWAP_GIB} GiB swap required"
 fi

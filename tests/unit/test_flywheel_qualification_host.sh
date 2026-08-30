@@ -27,8 +27,8 @@ EOF
 cat >"$MEMINFO" <<'EOF'
 MemTotal:       10485760 kB
 MemFree:         1048576 kB
-SwapTotal:       8388608 kB
-SwapFree:        8388608 kB
+SwapTotal:       8388604 kB
+SwapFree:        8388604 kB
 EOF
 cat >"$BIN_ROOT/uname" <<'SH'
 #!/usr/bin/env bash
@@ -90,7 +90,7 @@ assert value["host"]["os"] == {"id": "ubuntu", "version": "24.04"}
 assert value["host"]["architecture"] == "aarch64"
 assert value["host"]["isolation"] == "qemu"
 assert value["host"]["resources"]["memory_total_bytes"] == 10 * 1024**3
-assert value["host"]["resources"]["swap_total_bytes"] == 8 * 1024**3
+assert value["host"]["resources"]["swap_total_bytes"] == 8388604 * 1024
 assert value["source"]["head"] == head
 assert value["source"]["tree"] == tree
 assert value["source"]["clean"] is True
