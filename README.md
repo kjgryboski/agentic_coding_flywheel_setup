@@ -89,12 +89,16 @@ Git identity, existing guidance, automation, dirty state, and `.acfs-new`
 conflicts, then produce content-addressed cohort plans without creating a
 branch, PR, check, or provider mutation. Repository eligibility is also
 read-only. It accepts only the producer-sealed Ops synthetic-pilot contract,
-revalidates the embedded receipt against its current clean source and evidence,
+pins that receipt to its approved immutable content address, revalidates the
+embedded receipt against its current clean source and evidence,
 and binds it to a clean `main` checkout exactly matching the locally observed
 `origin/main`, GitHub origin identity, and root `AGENTS.md` digest. Its outcome
 is only `eligible_for_separately_authorized_live_pilot`; it always records
 `mutation_authorized=false` and `live_rollout_passed=false`. A generic local
 `agent-flywheel.repository-rollout/v1` JSON file is not trusted as live proof.
+Repository inspection disables Git hooks, filesystem monitors, replacement
+objects, and optional locks, rejects hidden index flags, and runs its Python
+entrypoint in isolated mode.
 
 > **Production environments:** For stable, reproducible installs, pin to a tagged release or specific commit:
 > ```bash

@@ -63,6 +63,22 @@ OPS_EVIDENCE_FILES = (
     "src/ops_steward/github_admission_store.py",
     "src/ops_steward/github_admission_webhook.py",
 )
+OPS_PILOT_ARTIFACT_SHA256 = "6a6232d3c98a56d6740f3382353cae785882d7ede2c51a2b28a0a0ef263544aa"
+OPS_PILOT_RECEIPT_SHA256 = "e01f5ca3f3ab55da1a2cf932f4643d6d0a68cac73c13d22b4baff02c3df9c58e"
+OPS_PILOT_HEAD = "202040d1b72183225dfdfc665be78ad429eba3ff"
+OPS_PILOT_TREE = "32be2a7b7b2940e45de2d2e847fbb9b14866c962"
+OPS_PILOT_EVIDENCE_SHA256 = {
+    "scripts/run-github-admission-synthetic-pilot.py":
+        "e6660fc3f76fffc2a647d5914cdc0efef9e5265aeaa2bd5f964ce856c7470866",
+    "tests/test_github_admission_synthetic_pilot.py":
+        "d30f6ecaa83a869f5492bae33ee5e1586ba35d87f1ce09e361eb1867f770eeca",
+    "src/ops_steward/github_admission_producer.py":
+        "45e3e9882ff8821d331c6c81e66b00c6fa7a7ba5e0e56758d100efc239ba8d31",
+    "src/ops_steward/github_admission_store.py":
+        "415483996b507dff06db3095e4b894455cadb342c8b8484c37e95d54bef59efa",
+    "src/ops_steward/github_admission_webhook.py":
+        "bfdda916f4d268bbb280434c4a7406ed9ee03465d237208927c6fd1f028ece32",
+}
 RECEIPT_MAXIMUM_BYTES = 4 * 1024 * 1024
 
 
@@ -117,47 +133,110 @@ def canonical_github_repository(remote: str) -> str:
     if scp_match:
         owner, repository = scp_match.groups()
     else:
-        parsed = urllib.parse.urlsplit(candidate)
+        try:
+            parsed = urllib.parse.urlsplit(candidate)
+            port = parsed.port
+        except ValueError as error:
+            raise ControlError("origin has an invalid port") from error
         if parsed.hostname != "github.com" or parsed.password or parsed.query or parsed.fragment:
             raise ControlError("origin must be an uncredentialed GitHub repository URL")
-        if parsed.scheme in {"http", "https"} and parsed.username is not None:
-            raise ControlError("origin must not contain credentials")
-        if parsed.scheme == "ssh" and parsed.username not in {None, "git"}:
-            raise ControlError("origin SSH user must be git")
-        if parsed.scheme not in {"http", "https", "ssh", "git"}:
-            raise ControlError("origin must use HTTPS, SSH, or the Git protocol")
-        parts = [part for part in parsed.path.split("/") if part]
-        if len(parts) != 2:
+        if parsed.scheme == "https":
+            if parsed.username is not None or port is not None:
+                raise ControlError("origin HTTPS URL must not contain credentials or a port")
+        elif parsed.scheme == "ssh":
+            if parsed.username != "git" or port not in {None, 22}:
+                raise ControlError("origin SSH URL must use git@github.com and port 22")
+        else:
+            raise ControlError("origin must use canonical HTTPS or SSH")
+        if not re.fullmatch(r"/[^/]+/[^/]+", parsed.path):
             raise ControlError("origin must identify exactly one GitHub owner/repository")
-        owner, repository = parts
+        owner, repository = parsed.path[1:].split("/")
         if repository.endswith(".git"):
             repository = repository[:-4]
     return normalize_repository_name(f"{owner}/{repository}")
 
 
 def normalize_repository_name(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value):
+    parts = value.split("/")
+    if len(parts) != 2:
         raise ControlError("repository identity must be OWNER/REPOSITORY")
-    return value.casefold()
+    owner, repository = parts
+    owner_valid = bool(
+        len(owner) <= 39
+        and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", owner)
+    )
+    repository_valid = bool(
+        len(repository) <= 100
+        and repository not in {".", ".."}
+        and re.fullmatch(r"[A-Za-z0-9._-]+", repository)
+    )
+    if not owner_valid or not repository_valid:
+        raise ControlError("repository identity must be a canonical GitHub OWNER/REPOSITORY")
+    return f"{owner}/{repository}".casefold()
 
 
-def git(root: pathlib.Path, *arguments: str) -> str:
+def git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.update({
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_EXTERNAL_DIFF": "",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+    })
+    return environment
+
+
+def git_command(root: pathlib.Path, *arguments: str) -> list[str]:
+    return [
+        "git",
+        "-c", "core.fsmonitor=false",
+        "-c", "core.untrackedCache=false",
+        "-c", f"core.hooksPath={os.devnull}",
+        "-c", "diff.external=",
+        "-c", "interactive.diffFilter=",
+        "-C", str(root),
+        *arguments,
+    ]
+
+
+def git_result(root: pathlib.Path, *arguments: str, timeout: int = 15) -> subprocess.CompletedProcess[bytes]:
     try:
-        completed = subprocess.run(
-            ["git", "-C", str(root), *arguments],
+        return subprocess.run(
+            git_command(root, *arguments),
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=15,
+            timeout=timeout,
+            env=git_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ControlError(f"Git inspection failed for {root}: {error}") from error
+
+
+def git(root: pathlib.Path, *arguments: str) -> str:
+    completed = git_result(root, *arguments)
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", errors="replace").strip()
         raise ControlError(f"Git inspection failed for {root}: {detail or 'unknown error'}")
     if len(completed.stdout) > 16 * 1024 * 1024:
         raise ControlError(f"Git inspection output exceeds 16 MiB for {root}")
     return completed.stdout.decode("utf-8", errors="replace")
+
+
+def repository_status(root: pathlib.Path) -> str:
+    flags = git(root, "ls-files", "-v", "-z", "--cached")
+    unsafe = []
+    for record in (item for item in flags.split("\0") if item):
+        if len(record) < 3 or record[1] != " " or record[0] != "H":
+            unsafe.append(record[2:] if len(record) >= 3 else record)
+    if unsafe:
+        raise ControlError(
+            "repository has unsafe assume-unchanged, skip-worktree, or unmerged index flags: "
+            + ", ".join(sorted(unsafe)[:10])
+        )
+    return git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 
 
 def stable_read(path: pathlib.Path, maximum_bytes: int, label: str) -> bytes:
@@ -280,6 +359,17 @@ def validate_synthetic_pilot(raw: bytes, value: dict[str, Any]) -> dict[str, Any
     if any(not is_hex(evidence.get(path), 64) for path in OPS_EVIDENCE_FILES):
         raise ControlError("synthetic pilot evidence digests must be lowercase SHA-256 values")
 
+    artifact_sha256 = hashlib.sha256(raw).hexdigest()
+    if (
+        artifact_sha256 != OPS_PILOT_ARTIFACT_SHA256
+        or receipt_sha256 != OPS_PILOT_RECEIPT_SHA256
+        or git_value != {"head": OPS_PILOT_HEAD, "tree": OPS_PILOT_TREE, "clean": True}
+        or evidence != OPS_PILOT_EVIDENCE_SHA256
+    ):
+        raise ControlError(
+            "synthetic pilot is not the approved producer-sealed content address"
+        )
+
     return {
         "status": "evidence_connected",
         "schema": OPS_PILOT_SCHEMA,
@@ -294,7 +384,7 @@ def validate_synthetic_pilot(raw: bytes, value: dict[str, Any]) -> dict[str, Any
         "claims": claims,
         "evidence_sha256": evidence,
         "receipt_sha256": receipt_sha256,
-        "artifact_sha256": hashlib.sha256(raw).hexdigest(),
+        "artifact_sha256": artifact_sha256,
     }
 
 
@@ -304,7 +394,7 @@ def bind_pilot_source(pilot: dict[str, Any], candidate: str) -> dict[str, Any]:
     root = pathlib.Path(git(probe, "rev-parse", "--show-toplevel").strip()).resolve(strict=True)
     head = git(root, "rev-parse", "HEAD").strip()
     tree = git(root, "rev-parse", "HEAD^{tree}").strip()
-    status_output = git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    status_output = repository_status(root)
     remote_url = git(root, "remote", "get-url", "origin").strip()
     remote_repository = canonical_github_repository(remote_url)
     if status_output:
@@ -323,7 +413,7 @@ def bind_pilot_source(pilot: dict[str, Any], candidate: str) -> dict[str, Any]:
     final_identity = (
         git(root, "rev-parse", "HEAD").strip(),
         git(root, "rev-parse", "HEAD^{tree}").strip(),
-        git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+        repository_status(root),
         git(root, "remote", "get-url", "origin").strip(),
     )
     if final_identity != (head, tree, status_output, remote_url):
@@ -523,7 +613,7 @@ def inspect_repository(candidate: str) -> dict[str, Any]:
     head = git(root, "rev-parse", "HEAD").strip()
     tree = git(root, "rev-parse", "HEAD^{tree}").strip()
     branch = git(root, "symbolic-ref", "--quiet", "--short", "HEAD").strip() if _has_branch(root) else None
-    status_output = git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    status_output = repository_status(root)
     status_records = [item for item in status_output.split("\0") if item]
     files = repository_files(root)
     agents_files = [path for path in files if pathlib.PurePosixPath(path).name == "AGENTS.md"]
@@ -552,7 +642,7 @@ def inspect_repository(candidate: str) -> dict[str, Any]:
     final_identity = (
         git(root, "rev-parse", "HEAD").strip(),
         git(root, "rev-parse", "HEAD^{tree}").strip(),
-        git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+        repository_status(root),
     )
     if final_identity != (head, tree, status_output):
         raise ControlError(f"Repository changed while being inspected: {root}")
@@ -604,13 +694,7 @@ def inspect_repository(candidate: str) -> dict[str, Any]:
 
 
 def _has_branch(root: pathlib.Path) -> bool:
-    completed = subprocess.run(
-        ["git", "-C", str(root), "symbolic-ref", "--quiet", "HEAD"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=5,
-    )
+    completed = git_result(root, "symbolic-ref", "--quiet", "HEAD", timeout=5)
     return completed.returncode == 0
 
 
@@ -648,7 +732,7 @@ def bind_target_repository(target_path: str, expected_target_repository: str) ->
     final_identity = (
         git(root, "rev-parse", "HEAD").strip(),
         git(root, "rev-parse", "HEAD^{tree}").strip(),
-        git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+        repository_status(root),
         git(root, "symbolic-ref", "--quiet", "--short", "HEAD").strip(),
         git(root, "remote", "get-url", "origin").strip(),
         git(root, "rev-parse", "--verify", upstream_ref).strip(),

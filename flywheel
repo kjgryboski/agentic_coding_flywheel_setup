@@ -102,6 +102,31 @@ die() {
     exit "$code"
 }
 
+safe_git() {
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_OPTIONAL_LOCKS=0 \
+    GIT_TERMINAL_PROMPT=0 \
+    command git \
+        -c core.fsmonitor=false \
+        -c core.untrackedCache=false \
+        -c core.hooksPath=/dev/null \
+        -c diff.external= \
+        -c interactive.diffFilter= \
+        "$@"
+}
+
+git_index_flags_safe() {
+    local root="$1"
+    safe_git -C "$root" ls-files -v -z --cached \
+        | python3 -I -c '
+import sys
+records = [item for item in sys.stdin.buffer.read().split(b"\0") if item]
+raise SystemExit(0 if all(len(item) >= 3 and item[0:1] == b"H" and item[1:2] == b" " for item in records) else 1)
+'
+}
+
 ensure_temp_root() {
     if [[ -z "$TEMP_ROOT" ]]; then
         TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flywheel.XXXXXXXX")"
@@ -110,7 +135,7 @@ ensure_temp_root() {
 }
 
 read_source_pointer() {
-    python3 - "$SOURCE_POINTER" <<'PY'
+    python3 -I - "$SOURCE_POINTER" <<'PY'
 import os
 import stat
 import sys
@@ -173,7 +198,7 @@ require_mac_tools() {
 vm_probe() {
     local inventory=""
     if ! inventory="$("$LIMACTL" list --json 2>/dev/null)"; then
-        python3 - "$VM_NAME" "$CANONICAL_VM_NAME" <<'PY'
+        python3 -I - "$VM_NAME" "$CANONICAL_VM_NAME" <<'PY'
 import json
 import sys
 
@@ -193,7 +218,7 @@ print(json.dumps({
 PY
         return 0
     fi
-    python3 - "$VM_NAME" "$CANONICAL_VM_NAME" "$inventory" <<'PY'
+    python3 -I - "$VM_NAME" "$CANONICAL_VM_NAME" "$inventory" <<'PY'
 import json
 import sys
 
@@ -322,7 +347,7 @@ PY
 }
 
 probe_value() {
-    python3 -c 'import json,sys; value=json.loads(sys.argv[1]); result=value'"$2"'; print(json.dumps(result) if isinstance(result, (dict, list, bool)) or result is None else result)' "$1"
+    python3 -I -c 'import json,sys; value=json.loads(sys.argv[1]); result=value'"$2"'; print(json.dumps(result) if isinstance(result, (dict, list, bool)) or result is None else result)' "$1"
 }
 
 ensure_running() {
@@ -351,10 +376,12 @@ ensure_running() {
         template="$root/$VM_TEMPLATE_RELATIVE"
         [[ -f "$template" && ! -L "$template" ]] \
             || die 3 "the canonical Lima template is unavailable or unsafe: $template"
-        git -C "$root" ls-files --error-unmatch -- "$VM_TEMPLATE_RELATIVE" >/dev/null 2>&1 \
+        safe_git -C "$root" ls-files --error-unmatch -- "$VM_TEMPLATE_RELATIVE" >/dev/null 2>&1 \
             || die 2 "the canonical Lima template is not tracked by the exact source checkout; no VM was created"
-        git -C "$root" diff --quiet -- "$VM_TEMPLATE_RELATIVE" \
-            && git -C "$root" diff --cached --quiet -- "$VM_TEMPLATE_RELATIVE" \
+        git_index_flags_safe "$root" \
+            || die 2 "the source checkout has unsafe index flags; no VM was created"
+        safe_git -C "$root" diff --no-ext-diff --quiet -- "$VM_TEMPLATE_RELATIVE" \
+            && safe_git -C "$root" diff --no-ext-diff --cached --quiet -- "$VM_TEMPLATE_RELATIVE" \
             || die 2 "the canonical Lima template has uncommitted drift; no VM was created"
         "$LIMACTL" validate "$template" >/dev/null \
             || die 2 "the canonical Lima template failed validation; no VM was created"
@@ -496,7 +523,7 @@ finally:
         os.close(descriptor)
 PY
     chmod 0600 "$helper_program"
-    python3 "$helper_program" "$LOCK_DIR/owner.lock" "$result_file" "$operation" "$$" \
+    python3 -I "$helper_program" "$LOCK_DIR/owner.lock" "$result_file" "$operation" "$$" \
         <"$control_fifo" &
     LOCK_HELPER_PID=$!
     exec 9>"$control_fifo"
@@ -552,7 +579,7 @@ stage_source() {
     local guest_bundle="/var/tmp/agent-flywheel-acfs-$head.bundle"
     local guest_root="/opt/agent-flywheel-acfs-$head"
 
-    git -C "$root" bundle create "$bundle" HEAD
+    safe_git -C "$root" bundle create "$bundle" HEAD
     bundle_sha256="$(sha256_file "$bundle")"
     "$LIMACTL" copy --backend=scp "$bundle" "$VM_NAME:$guest_bundle" >/dev/null
     "$LIMACTL" shell "$VM_NAME" -- bash -lc '
@@ -584,7 +611,7 @@ write_install_receipt() {
         authority="$root/config/flywheel-license-clearance.json"
     fi
     authority_sha256="$(sha256_file "$authority")"
-    python3 - "$head" "$tree" "$guest_root" "$bundle_sha256" "$authority_sha256" "$authority" <<'PY' >"$candidate"
+    python3 -I - "$head" "$tree" "$guest_root" "$bundle_sha256" "$authority_sha256" "$authority" <<'PY' >"$candidate"
 import datetime
 import json
 import sys
@@ -637,7 +664,7 @@ PY
 }
 
 installation_receipt_context() {
-    python3 - "$INSTALL_RECEIPT" <<'PY'
+    python3 -I - "$INSTALL_RECEIPT" <<'PY'
 import hashlib
 import hmac
 import json
@@ -793,14 +820,16 @@ install_command() {
     source_cli="$root/flywheel"
     [[ -f "$source_cli" && ! -L "$source_cli" ]] \
         || die 2 "source checkout has no regular flywheel launcher"
-    git -C "$root" diff --quiet \
+    git_index_flags_safe "$root" \
+        || die 2 "source checkout has unsafe assume-unchanged, skip-worktree, or unmerged index flags"
+    safe_git -C "$root" diff --no-ext-diff --quiet \
         || die 2 "source checkout has uncommitted changes; commit or preserve them before flywheel mac install"
-    git -C "$root" diff --cached --quiet \
+    safe_git -C "$root" diff --no-ext-diff --cached --quiet \
         || die 2 "source checkout has staged changes; commit or preserve them before flywheel mac install"
-    [[ -z "$(git -C "$root" ls-files --others --exclude-standard)" ]] \
+    [[ -z "$(safe_git -C "$root" ls-files --others --exclude-standard)" ]] \
         || die 2 "source checkout has untracked files; preserve them before flywheel mac install"
-    head="$(git -C "$root" rev-parse HEAD)"
-    tree="$(git -C "$root" rev-parse 'HEAD^{tree}')"
+    head="$(safe_git -C "$root" rev-parse HEAD)"
+    tree="$(safe_git -C "$root" rev-parse 'HEAD^{tree}')"
 
     acquire_lifecycle_lock "mac install"
     ensure_temp_root
@@ -867,16 +896,17 @@ status_command() {
     fi
     root="$(find_source_root 2>/dev/null || true)"
     if [[ -n "$root" ]]; then
-        head="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
-        tree="$(git -C "$root" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+        head="$(safe_git -C "$root" rev-parse HEAD 2>/dev/null || true)"
+        tree="$(safe_git -C "$root" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
         authority="$root/config/flywheel-partial-safe-allowlist.json"
         repository_control="$root/scripts/flywheel-repository-control.py"
         if [[ -f "$root/config/flywheel-license-clearance.json" ]]; then
             authority="$root/config/flywheel-license-clearance.json"
         fi
-        if git -C "$root" diff --quiet \
-            && git -C "$root" diff --cached --quiet \
-            && [[ -z "$(git -C "$root" ls-files --others --exclude-standard)" ]]; then
+        if git_index_flags_safe "$root" \
+            && safe_git -C "$root" diff --no-ext-diff --quiet \
+            && safe_git -C "$root" diff --no-ext-diff --cached --quiet \
+            && [[ -z "$(safe_git -C "$root" ls-files --others --exclude-standard)" ]]; then
             source_clean="true"
         fi
     fi
@@ -891,12 +921,13 @@ status_command() {
             --json 2>/dev/null)"
         set -e
     fi
-    status_json="$(python3 - "$probe" "$root" "$head" "$tree" "$source_clean" "$installation_json" "$authority" "$repository_control" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
+    status_json="$(python3 -I - "$probe" "$root" "$head" "$tree" "$source_clean" "$installation_json" "$authority" "$repository_control" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
 import hashlib
 import json
 import os
 import pathlib
 import stat
+import subprocess
 import sys
 
 (
@@ -959,6 +990,60 @@ def read_json(path, label):
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return None, None
 
+def safe_git(root, *arguments):
+    environment = os.environ.copy()
+    environment.update({
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_EXTERNAL_DIFF": "",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+    })
+    completed = subprocess.run(
+        [
+            "git",
+            "-c", "core.fsmonitor=false",
+            "-c", "core.untrackedCache=false",
+            "-c", f"core.hooksPath={os.devnull}",
+            "-c", "diff.external=",
+            "-c", "interactive.diffFilter=",
+            "-C", root,
+            *arguments,
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=15,
+        env=environment,
+    )
+    if completed.returncode != 0 or len(completed.stdout) > 16 * 1024 * 1024:
+        raise ValueError("repository receipt validator Git trust check failed")
+    return completed.stdout
+
+def exact_validator_bytes(root, head, control_path):
+    expected_path = pathlib.Path(root) / "scripts" / "flywheel-repository-control.py"
+    if pathlib.Path(control_path) != expected_path:
+        raise ValueError("repository receipt validator path is not canonical")
+    flags = safe_git(root, "ls-files", "-v", "-z", "--cached")
+    unsafe = []
+    for record in (item for item in flags.split(b"\0") if item):
+        if len(record) < 3 or record[1:2] != b" " or record[:1] != b"H":
+            unsafe.append(record[2:] if len(record) >= 3 else record)
+    if unsafe:
+        raise ValueError("repository receipt validator source has unsafe index flags")
+    if safe_git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all"):
+        raise ValueError("repository receipt validator source is not clean")
+    if safe_git(root, "rev-parse", "HEAD").decode().strip() != head:
+        raise ValueError("repository receipt validator source head changed")
+    control_raw = stable_read(control_path, 4 * 1024 * 1024, "repository receipt validator")
+    committed_raw = safe_git(root, "show", f"{head}:scripts/flywheel-repository-control.py")
+    if control_raw != committed_raw:
+        raise ValueError("repository receipt validator differs from the committed source blob")
+    if safe_git(root, "rev-parse", "HEAD").decode().strip() != head:
+        raise ValueError("repository receipt validator source changed during validation")
+    return control_raw
+
 def parse_json(raw, schema):
     if raw:
         try:
@@ -1016,7 +1101,7 @@ if rollout_receipt_path:
                 "repository receipt validator requires the clean exact source recorded by the installation receipt"
             )
         control_path = pathlib.Path(repository_control_path)
-        control_raw = stable_read(control_path, 4 * 1024 * 1024, "repository receipt validator")
+        control_raw = exact_validator_bytes(source_root, source_head, control_path)
         control_namespace = {
             "__file__": str(control_path),
             "__name__": "flywheel_repository_control",
@@ -1094,7 +1179,7 @@ PY
     if ((JSON == 1)); then
         printf '%s\n' "$status_json"
     else
-        python3 -c '
+        python3 -I -c '
 import json,sys
 value=json.loads(sys.argv[1])
 print("Flywheel: {}".format(value["readiness"]))
@@ -1133,7 +1218,7 @@ for blocker in value["blockers"]:
     ))
 ' "$status_json"
     fi
-    python3 -c 'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1])["readiness"] == "ready" else 1)' "$status_json"
+    python3 -I -c 'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1])["readiness"] == "ready" else 1)' "$status_json"
 }
 
 qualification_command() {
@@ -1267,7 +1352,7 @@ capabilities_command() {
     if [[ -n "$root" && -f "$root/config/flywheel-license-clearance.json" ]]; then
         license_cleared="true"
     fi
-    python3 - "$version" "$license_cleared" <<'PY'
+    python3 -I - "$version" "$license_cleared" <<'PY'
 import json
 import sys
 
@@ -1364,7 +1449,7 @@ repository_control_command() {
         )
     fi
     ((JSON == 1)) && arguments+=(--json)
-    python3 "$script" "${arguments[@]}"
+    python3 -I "$script" "${arguments[@]}"
 }
 
 command_name="${1:-help}"

@@ -560,7 +560,81 @@ assert value["admission"]["live_rollout_eligible"] is False
 assert len(value["inspection_sha256"]) == 64
 ' "$inspection_json"
 
-OPS_SOURCE="$TEST_ROOT/ops-source"
+# Read-only repository inspection must not execute repository-configured hooks.
+cat >"$TEST_ROOT/fsmonitor-hook" <<'SH'
+#!/usr/bin/env bash
+: >"$FLYWHEEL_TEST_FSMONITOR_MARKER"
+printf '{}\n'
+SH
+chmod 0755 "$TEST_ROOT/fsmonitor-hook"
+export FLYWHEEL_TEST_FSMONITOR_MARKER="$TEST_ROOT/fsmonitor-ran"
+git -C "$QUALIFICATION_ROOT" config core.fsmonitor "$TEST_ROOT/fsmonitor-hook"
+"$REPO_ROOT/flywheel" repository inspect "$QUALIFICATION_ROOT" --json >/dev/null
+[[ ! -e "$FLYWHEEL_TEST_FSMONITOR_MARKER" ]]
+git -C "$QUALIFICATION_ROOT" config --unset core.fsmonitor
+
+# Isolated Python execution prevents current-directory module shadowing.
+mkdir -p "$TEST_ROOT/import-trap"
+export FLYWHEEL_TEST_CWD_IMPORT_MARKER="$TEST_ROOT/cwd-import-ran"
+cat >"$TEST_ROOT/import-trap/datetime.py" <<'PY'
+import os
+with open(os.environ["FLYWHEEL_TEST_CWD_IMPORT_MARKER"], "w", encoding="utf-8") as handle:
+    handle.write("unsafe")
+PY
+(
+    cd "$TEST_ROOT/import-trap"
+    "$REPO_ROOT/flywheel" repository inspect "$QUALIFICATION_ROOT" --json >/dev/null
+)
+[[ ! -e "$TEST_ROOT/cwd-import-ran" ]]
+
+# Hidden index state is never accepted as a clean target.
+git -C "$QUALIFICATION_ROOT" update-index --assume-unchanged VERSION
+printf 'hidden drift\n' >"$QUALIFICATION_ROOT/VERSION"
+hidden_target_rc=0
+hidden_target_error="$("$REPO_ROOT/flywheel" repository inspect "$QUALIFICATION_ROOT" --json 2>&1)" \
+    || hidden_target_rc=$?
+[[ "$hidden_target_rc" -eq 2 ]]
+[[ "$hidden_target_error" == *'unsafe assume-unchanged, skip-worktree, or unmerged index flags'* ]]
+git -C "$QUALIFICATION_ROOT" update-index --no-assume-unchanged VERSION
+printf '0.8.0\n' >"$QUALIFICATION_ROOT/VERSION"
+git -C "$QUALIFICATION_ROOT" update-index --skip-worktree AGENTS.md
+skip_target_rc=0
+skip_target_error="$("$REPO_ROOT/flywheel" repository inspect "$QUALIFICATION_ROOT" --json 2>&1)" \
+    || skip_target_rc=$?
+[[ "$skip_target_rc" -eq 2 ]]
+[[ "$skip_target_error" == *'unsafe assume-unchanged, skip-worktree, or unmerged index flags'* ]]
+git -C "$QUALIFICATION_ROOT" update-index --no-skip-worktree AGENTS.md
+
+# GitHub origin identities are deliberately narrower than general Git URLs.
+python3 -I - "$REPO_ROOT/scripts/flywheel-repository-control.py" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("flywheel_repository_control", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+assert module.canonical_github_repository("https://github.com/Owner/repo.git") == "owner/repo"
+assert module.canonical_github_repository("git@github.com:Owner/repo.git") == "owner/repo"
+assert module.canonical_github_repository("ssh://git@github.com/Owner/repo.git") == "owner/repo"
+for candidate in (
+    "https://github.com:bogus/owner/repo.git",
+    "git://attacker@github.com/owner/repo.git",
+    "ssh://github.com/owner/repo.git",
+    "https://github.com/./repo.git",
+    "https://github.com/../repo.git",
+    "https://github.com//owner/repo.git",
+    "https://github.com/owner/repo.git/",
+):
+    try:
+        module.canonical_github_repository(candidate)
+    except module.ControlError:
+        continue
+    raise AssertionError(f"unsafe GitHub origin accepted: {candidate}")
+PY
+
+FORGED_OPS_SOURCE="$TEST_ROOT/ops-source"
+OPS_SOURCE="$FORGED_OPS_SOURCE"
 mkdir -p \
     "$OPS_SOURCE/scripts" \
     "$OPS_SOURCE/tests" \
@@ -618,6 +692,20 @@ with open(output_path, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
 
+forged_pilot_rc=0
+forged_pilot_error="$("$REPO_ROOT/flywheel" repository eligibility "$TARGET_ROOT" \
+    --pilot-receipt "$TEST_ROOT/bound-pilot.json" \
+    --pilot-source "$OPS_SOURCE" \
+    --target-repository example/bookclub \
+    --json 2>&1)" || forged_pilot_rc=$?
+[[ "$forged_pilot_rc" -eq 2 ]]
+[[ "$forged_pilot_error" == *'not the approved producer-sealed content address'* ]]
+
+OPS_SOURCE="${ACFS_TEST_TRUSTED_OPS_SOURCE:-}"
+if [[ -n "$OPS_SOURCE" \
+    && "$(git -C "$OPS_SOURCE" rev-parse HEAD 2>/dev/null || true)" == "202040d1b72183225dfdfc665be78ad429eba3ff" ]]; then
+cp "$REPO_ROOT/tests/unit/fixtures/ops-github-admission-synthetic-202040d1.json" \
+    "$TEST_ROOT/bound-pilot.json"
 eligibility_json="$("$REPO_ROOT/flywheel" repository eligibility "$TARGET_ROOT" \
     --pilot-receipt "$TEST_ROOT/bound-pilot.json" \
     --pilot-source "$OPS_SOURCE" \
@@ -691,7 +779,7 @@ python3 -c '
 import json,sys
 value=json.loads(sys.argv[1])
 assert value["repository_rollout"]["status"] == "invalid"
-assert "Ops pilot source has drifted from the sealed receipt" in value["repository_rollout"]["error"]
+assert "not the approved producer-sealed content address" in value["repository_rollout"]["error"]
 ' "$forged_eligibility_status"
 
 python3 - "$TEST_ROOT/eligibility.json" "$TEST_ROOT/missing-source-eligibility.json" "$TEST_ROOT/missing-target-eligibility.json" <<'PY'
@@ -781,29 +869,33 @@ python3 -c '
 import json,sys
 value=json.loads(sys.argv[1])
 assert value["repository_rollout"]["status"] == "invalid"
-assert "target binding has drifted" in value["repository_rollout"]["error"]
+assert "unsafe assume-unchanged, skip-worktree, or unmerged index flags" in value["repository_rollout"]["error"]
 ' "$target_instructions_status"
 
-printf 'source drift\n' >>"$OPS_SOURCE/src/ops_steward/github_admission_producer.py"
-git -C "$OPS_SOURCE" add src/ops_steward/github_admission_producer.py
-git -C "$OPS_SOURCE" -c user.name=Flywheel -c user.email=flywheel.invalid@example.test \
-    commit -qm source-drift
-source_drift_rc=0
-source_drift_error="$("$REPO_ROOT/flywheel" repository eligibility "$TARGET_ROOT" \
-    --pilot-receipt "$TEST_ROOT/bound-pilot.json" \
-    --pilot-source "$OPS_SOURCE" \
-    --target-repository example/bookclub \
-    --json 2>&1)" || source_drift_rc=$?
-[[ "$source_drift_rc" -eq 2 ]]
-[[ "$source_drift_error" == *'Ops pilot source has drifted from the sealed receipt'* ]]
+python3 - "$TEST_ROOT/eligibility-after-head.json" "$TEST_ROOT/source-drift-eligibility.json" "$FORGED_OPS_SOURCE" <<'PY'
+import hashlib
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+value["pilot"]["source"]["root"] = sys.argv[3]
+value.pop("eligibility_sha256")
+canonical = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+value["eligibility_sha256"] = hashlib.sha256(canonical).hexdigest()
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+PY
 source_drift_status="$("$REPO_ROOT/flywheel" status --json \
-    --rollout-receipt "$TEST_ROOT/eligibility-after-head.json")"
+    --rollout-receipt "$TEST_ROOT/source-drift-eligibility.json")"
 python3 -c '
 import json,sys
 value=json.loads(sys.argv[1])
 assert value["repository_rollout"]["status"] == "invalid"
 assert "Ops pilot source has drifted from the sealed receipt" in value["repository_rollout"]["error"]
 ' "$source_drift_status"
+fi
 
 python3 - "$TEST_ROOT/rollout-inventory.json" "$QUALIFICATION_ROOT" <<'PY'
 import json
@@ -865,6 +957,27 @@ value=json.loads(sys.argv[1])
 assert value["repository_rollout"]["status"] == "invalid"
 assert [item["code"] for item in value["blockers"]] == ["receipt_invalid"]
 ' "$tampered_plan_status_json"
+
+git -C "$QUALIFICATION_ROOT" update-index --assume-unchanged \
+    scripts/flywheel-repository-control.py
+cat >>"$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py" <<'PY'
+with open(os.environ["FLYWHEEL_TEST_HIDDEN_VALIDATOR_MARKER"], "w", encoding="utf-8") as handle:
+    handle.write("executed")
+PY
+export FLYWHEEL_TEST_HIDDEN_VALIDATOR_MARKER="$TEST_ROOT/hidden-validator-ran"
+hidden_validator_status="$("$REPO_ROOT/flywheel" status --json \
+    --rollout-receipt "$TEST_ROOT/rollout-plan.json")" || true
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["repository_rollout"]["status"] == "invalid"
+assert "clean exact source" in value["repository_rollout"]["error"]
+' "$hidden_validator_status"
+[[ ! -e "$FLYWHEEL_TEST_HIDDEN_VALIDATOR_MARKER" ]]
+git -C "$QUALIFICATION_ROOT" update-index --no-assume-unchanged \
+    scripts/flywheel-repository-control.py
+cp "$REPO_ROOT/scripts/flywheel-repository-control.py" \
+    "$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py"
 
 printf 'validator trust drift\n' >"$QUALIFICATION_ROOT/validator-trust-drift.txt"
 # Installation remains the one lifecycle command that requires a clean current
