@@ -2925,15 +2925,14 @@ check_stack() {
         _ms_os="$(uname -s 2>/dev/null || echo unknown)"
         _ms_fix="Re-run: $(fix_for_module stack.meta_skill)"
 
-        # Pre-built binaries exist for: x86_64-linux, aarch64-darwin, x86_64-darwin
-        # ARM64 Linux (aarch64-Linux) does NOT have a pre-built binary yet:
-        # https://github.com/Dicklesworthstone/meta_skill/issues/1
+        # Pre-built binaries exist for: x86_64-linux, aarch64-darwin, x86_64-darwin.
+        # ARM64 Linux uses the exact source revision and Cargo.lock bound by the
+        # generated installer; it never falls back to an unpinned checkout.
         case "${_ms_arch}-${_ms_os}" in
             aarch64-Linux|arm64-Linux)
-                # ARM64 Linux binary is not yet published; the install script will 404
                 check "stack.meta_skill" "meta_skill (ms)" "warn" \
-                    "ARM64 Linux binary not yet available (see https://github.com/Dicklesworthstone/meta_skill/issues/1)" \
-                    "No checksum-anchored Linux ARM64 installer is available; wait for a verified release artifact"
+                    "not installed; exact locked ARM64 source build is available" \
+                    "$_ms_fix (builds approved commit 2a4bc62a04c98d8812bfe68b77c862d87e1731e3)"
                 ;;
             x86_64-Linux|x86_64-Darwin|arm64-Darwin|aarch64-Darwin)
                 # These platforms have pre-built binaries

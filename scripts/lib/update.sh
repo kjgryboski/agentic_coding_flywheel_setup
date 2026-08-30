@@ -4385,7 +4385,7 @@ update_run_verified_installer_with_env() {
     fi
 
     if [[ "$tool" == "ms" ]] && update_is_linux_arm64; then
-        echo "meta_skill has no checksum-anchored Linux ARM64 install source; refusing an unpinned source checkout" >&2
+        echo "meta_skill ARM64 updates require the exact locked module installer; re-run the current install with --only stack.meta_skill" >&2
         return 1
     fi
 

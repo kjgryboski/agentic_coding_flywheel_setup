@@ -55,8 +55,9 @@ Exit codes:
   5  another operation owns the requested state
 
 The Mac command manages the supported Ubuntu VM. Native macOS is not treated
-as an ACFS installation. The current installation scope is PARTIAL_SAFE: eight
-approved modules are installed and all 27 licensing-held modules stay blocked.
+as an ACFS installation. When the exact license-clearance receipt is present,
+the command commissions the 26 newly eligible modules while preserving the
+independent Agent Mail C5 and PFR qualification holds.
 USAGE
 }
 
@@ -198,28 +199,46 @@ write_install_receipt() {
     local tree="$3"
     local guest_root="$4"
     local bundle_sha256="$5"
-    local allowlist="$root/config/flywheel-partial-safe-allowlist.json"
-    local allowlist_sha256=""
+    local authority="$root/config/flywheel-partial-safe-allowlist.json"
+    local authority_sha256=""
     local candidate="$TEMP_ROOT/installation.json"
-    allowlist_sha256="$(sha256_file "$allowlist")"
-    python3 - "$head" "$tree" "$guest_root" "$bundle_sha256" "$allowlist_sha256" "$allowlist" <<'PY' >"$candidate"
+    if [[ -f "$root/config/flywheel-license-clearance.json" ]]; then
+        authority="$root/config/flywheel-license-clearance.json"
+    fi
+    authority_sha256="$(sha256_file "$authority")"
+    python3 - "$head" "$tree" "$guest_root" "$bundle_sha256" "$authority_sha256" "$authority" <<'PY' >"$candidate"
 import datetime
 import json
 import sys
 
-head, tree, guest_root, bundle_sha256, allowlist_sha256, allowlist_path = sys.argv[1:]
-with open(allowlist_path, encoding="utf-8") as handle:
-    allowlist = json.load(handle)
+head, tree, guest_root, bundle_sha256, authority_sha256, authority_path = sys.argv[1:]
+with open(authority_path, encoding="utf-8") as handle:
+    authority = json.load(handle)
+license_cleared = authority.get("schema") == "agent-flywheel.license-clearance/v1"
+if license_cleared:
+    commissioning = authority["commissioning"]
+    claim = commissioning["claim"]
+    approved = len(commissioning["resolved_modules"])
+    cleared = authority["license_gate"]["cleared_count"]
+    pending = authority["license_gate"]["pending_count"]
+    authority_kind = "license_clearance"
+else:
+    claim = "PARTIAL_SAFE"
+    approved = len(authority["allowed_resolved_modules"])
+    cleared = 0
+    pending = authority["held_exclusions"]["count"]
+    authority_kind = "partial_safe_allowlist"
 print(json.dumps({
     "schema": "agent-flywheel.installation/v1",
-    "claim": "PARTIAL_SAFE",
+    "claim": claim,
     "installed_at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat(),
     "source": {"head": head, "tree": tree, "guest_root": guest_root},
     "bundle": {"sha256": bundle_sha256},
-    "allowlist": {"sha256": allowlist_sha256},
+    "authority": {"kind": authority_kind, "sha256": authority_sha256},
     "modules": {
-        "approved": len(allowlist["allowed_resolved_modules"]),
-        "licensing_held": allowlist["held_exclusions"]["count"],
+        "approved": approved,
+        "licensing_cleared": cleared,
+        "licensing_pending": pending,
     },
 }, sort_keys=True, separators=(",", ":")))
 PY
@@ -252,7 +271,11 @@ install_command() {
     IFS=$'\t' read -r guest_root bundle_sha256 <<<"$stage_result"
     [[ -n "$guest_root" && -n "$bundle_sha256" ]] \
         || die 3 "exact-source staging produced no identity; rerun flywheel mac install"
-    info "Commissioning the eight-module PARTIAL_SAFE profile"
+    if [[ -f "$root/config/flywheel-license-clearance.json" ]]; then
+        info "Commissioning the license-cleared profile with independent holds preserved"
+    else
+        info "Commissioning the eight-module PARTIAL_SAFE profile"
+    fi
     "$HEAVY_RUN" --stateful -- "$LIMACTL" shell "$VM_NAME" -- \
         sudo bash -p "$guest_root/scripts/flywheel-mac-install-guest.sh" "$guest_root"
 
@@ -282,7 +305,7 @@ status_command() {
     local head=""
     local tree=""
     local source_clean="false"
-    local allowlist=""
+    local authority=""
     local qualification_json=""
     local doctor_json=""
     local status_json=""
@@ -292,7 +315,10 @@ status_command() {
     if [[ -n "$root" ]]; then
         head="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
         tree="$(git -C "$root" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
-        allowlist="$root/config/flywheel-partial-safe-allowlist.json"
+        authority="$root/config/flywheel-partial-safe-allowlist.json"
+        if [[ -f "$root/config/flywheel-license-clearance.json" ]]; then
+            authority="$root/config/flywheel-license-clearance.json"
+        fi
         if git -C "$root" diff --quiet \
             && git -C "$root" diff --cached --quiet \
             && [[ -z "$(git -C "$root" ls-files --others --exclude-standard)" ]]; then
@@ -305,7 +331,7 @@ status_command() {
         doctor_json="$(doctor_command --json-internal 2>/dev/null)"
         set -e
     fi
-    status_json="$(python3 - "$VM_NAME" "$status" "$root" "$head" "$tree" "$source_clean" "$INSTALL_RECEIPT" "$allowlist" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
+    status_json="$(python3 - "$VM_NAME" "$status" "$root" "$head" "$tree" "$source_clean" "$INSTALL_RECEIPT" "$authority" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -319,7 +345,7 @@ import sys
     source_tree,
     source_clean_raw,
     install_receipt_path,
-    allowlist_path,
+    authority_path,
     rollout_receipt_path,
     qualification_raw,
     doctor_raw,
@@ -349,13 +375,29 @@ def parse_json(raw, schema):
             pass
     return {"schema": schema, "status": "not_run"}
 
-allowlist = read_json(allowlist_path) or {}
-approved = allowlist.get("allowed_resolved_modules", [])
-held = allowlist.get("held_exclusions", {})
+authority = read_json(authority_path) or {}
+license_cleared = authority.get("schema") == "agent-flywheel.license-clearance/v1"
+if license_cleared:
+    commissioning = authority.get("commissioning", {})
+    approved = commissioning.get("resolved_modules", [])
+    independent_holds = commissioning.get("independent_holds", [])
+    license_gate = authority.get("license_gate", {})
+    expected_claim = "LICENSE_CLEARED_PARTIAL"
+    expected_authority_kind = "license_clearance"
+    licensing_cleared = license_gate.get("cleared_count", 0)
+    licensing_pending = license_gate.get("pending_count", 0)
+else:
+    approved = authority.get("allowed_resolved_modules", [])
+    held = authority.get("held_exclusions", {})
+    independent_holds = []
+    expected_claim = "PARTIAL_SAFE"
+    expected_authority_kind = "partial_safe_allowlist"
+    licensing_cleared = 0
+    licensing_pending = held.get("count", 0)
 try:
-    current_allowlist_sha256 = hashlib.sha256(pathlib.Path(allowlist_path).read_bytes()).hexdigest()
+    current_authority_sha256 = hashlib.sha256(pathlib.Path(authority_path).read_bytes()).hexdigest()
 except OSError:
-    current_allowlist_sha256 = None
+    current_authority_sha256 = None
 installation_raw = read_json(install_receipt_path)
 if not isinstance(installation_raw, dict):
     installation = {
@@ -365,22 +407,24 @@ if not isinstance(installation_raw, dict):
 else:
     receipt_source = installation_raw.get("source", {})
     receipt_bundle = installation_raw.get("bundle", {})
-    receipt_allowlist = installation_raw.get("allowlist", {})
+    receipt_authority = installation_raw.get("authority", {})
     receipt_modules = installation_raw.get("modules", {})
     receipt_valid = bool(
         installation_raw.get("schema") == "agent-flywheel.installation/v1"
-        and installation_raw.get("claim") == "PARTIAL_SAFE"
+        and installation_raw.get("claim") == expected_claim
         and isinstance(receipt_source, dict)
         and is_hex(receipt_source.get("head"), 40)
         and is_hex(receipt_source.get("tree"), 40)
         and receipt_source.get("guest_root") == f"/opt/agent-flywheel-acfs-{receipt_source.get('head')}"
         and isinstance(receipt_bundle, dict)
         and is_hex(receipt_bundle.get("sha256"), 64)
-        and isinstance(receipt_allowlist, dict)
-        and is_hex(receipt_allowlist.get("sha256"), 64)
+        and isinstance(receipt_authority, dict)
+        and receipt_authority.get("kind") == expected_authority_kind
+        and is_hex(receipt_authority.get("sha256"), 64)
         and isinstance(receipt_modules, dict)
         and receipt_modules.get("approved") == len(approved)
-        and receipt_modules.get("licensing_held") == held.get("count")
+        and receipt_modules.get("licensing_cleared") == licensing_cleared
+        and receipt_modules.get("licensing_pending") == licensing_pending
     )
     installation = {
         "schema": "agent-flywheel.installation/v1",
@@ -393,15 +437,22 @@ else:
             "guest_root": receipt_source.get("guest_root"),
         },
         "bundle": {"sha256": receipt_bundle.get("sha256")},
-        "allowlist": {"sha256": receipt_allowlist.get("sha256")},
+        "authority": {
+            "kind": receipt_authority.get("kind"),
+            "sha256": receipt_authority.get("sha256"),
+        },
         "modules": {
             "approved": receipt_modules.get("approved"),
-            "licensing_held": receipt_modules.get("licensing_held"),
+            "licensing_cleared": receipt_modules.get("licensing_cleared"),
+            "licensing_pending": receipt_modules.get("licensing_pending"),
         },
     }
 
 qualification = parse_json(qualification_raw, "agent-flywheel.qualification-host/v1")
-doctor = parse_json(doctor_raw, "agent-flywheel.partial-safe-doctor/v1")
+doctor = parse_json(
+    doctor_raw,
+    "agent-flywheel.license-cleared-doctor/v1" if license_cleared else "agent-flywheel.partial-safe-doctor/v1",
+)
 
 recorded_source = installation.get("source", {})
 source_exact = bool(
@@ -411,11 +462,11 @@ source_exact = bool(
     and recorded_source.get("tree") == source_tree
 )
 source_clean = source_clean_raw == "true"
-allowlist_exact = bool(
-    current_allowlist_sha256
-    and installation.get("allowlist", {}).get("sha256") == current_allowlist_sha256
+authority_exact = bool(
+    current_authority_sha256
+    and installation.get("authority", {}).get("sha256") == current_authority_sha256
 )
-installation["matches_current_allowlist"] = allowlist_exact
+installation["matches_current_authority"] = authority_exact
 
 rollout = {"status": "not_connected"}
 if rollout_receipt_path:
@@ -526,8 +577,8 @@ elif installation.get("status") != "recorded":
     blockers.append({"scope": "lifecycle", "code": "installation_receipt_invalid", "next_command": "flywheel mac install"})
 elif not source_exact:
     blockers.append({"scope": "lifecycle", "code": "installed_source_drift", "next_command": "flywheel mac install"})
-elif not allowlist_exact:
-    blockers.append({"scope": "lifecycle", "code": "installed_allowlist_drift", "next_command": "flywheel mac install"})
+elif not authority_exact:
+    blockers.append({"scope": "lifecycle", "code": "installed_authority_drift", "next_command": "flywheel mac install"})
 if vm_status == "Running" and qualification.get("status") != "pass":
     blockers.append({"scope": "qualification", "code": "host_contract_failed", "next_command": "flywheel status --json"})
 if vm_status == "Running" and doctor.get("status") != "pass":
@@ -544,7 +595,7 @@ elif rollout.get("declared_status") != "pass":
 lifecycle_blocked = any(item["scope"] != "repository_rollout" for item in blockers)
 value = {
     "schema": "agent-flywheel.status/v2",
-    "claim": "PARTIAL_SAFE",
+    "claim": expected_claim,
     "status": vm_status,
     "readiness": "attention" if lifecycle_blocked else "ready",
     "vm": {"name": vm_name, "status": vm_status, "healthy": vm_status == "Running"},
@@ -559,9 +610,10 @@ value = {
     "modules": {
         "approved": approved,
         "approved_count": len(approved),
-        "licensing_held_count": held.get("count", 0),
-        "licensing_held_set_sha256": held.get("canonical_set_sha256"),
-        "pending_licensing_approvals": held.get("count", 0),
+        "licensing_cleared_count": licensing_cleared,
+        "pending_licensing_approvals": licensing_pending,
+        "independent_holds": independent_holds,
+        "independent_hold_count": len(independent_holds),
     },
     "qualification": qualification,
     "doctor": doctor,
@@ -591,6 +643,7 @@ print("Modules: {} approved; {} licensing approvals pending".format(
     value["modules"]["approved_count"],
     value["modules"]["pending_licensing_approvals"],
 ))
+print("Independent holds: {}".format(value["modules"]["independent_hold_count"]))
 print("Qualification: {}".format(value["qualification"].get("status", "not_run")))
 print("Doctor: {}".format(value["doctor"].get("status", "not_run")))
 print("Repository rollout: {}".format(value["repository_rollout"]["status"]))
@@ -626,9 +679,13 @@ doctor_command() {
     # Bash 3.2 with nounset treats expansion of an empty array as unbound.
     # Keep a sentinel and slice it away so the plain command passes zero args.
     local doctor_args=(__flywheel_sentinel__)
+    local authority_env=(ACFS_PARTIAL_SAFE_ALLOWLIST_FILE=/var/lib/agent-flywheel/doctor-allowlist.json)
     root="$(source_root)"
     head="$(git -C "$root" rev-parse HEAD)"
     guest_root="/opt/agent-flywheel-acfs-$head"
+    if [[ -f "$root/config/flywheel-license-clearance.json" ]]; then
+        authority_env=(ACFS_LICENSE_CLEARANCE_FILE=/var/lib/agent-flywheel/doctor-license-clearance.json)
+    fi
     if ((JSON == 1)) || [[ "$force_json" == "--json-internal" ]]; then
         doctor_args+=(--json)
     fi
@@ -638,7 +695,7 @@ doctor_command() {
         TARGET_USER=ubuntu \
         TARGET_HOME=/home/ubuntu \
         FLYWHEEL_SOURCE_ROOT="$guest_root" \
-        ACFS_PARTIAL_SAFE_ALLOWLIST_FILE=/var/lib/agent-flywheel/doctor-allowlist.json \
+        "${authority_env[@]}" \
         bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh" "${doctor_args[@]:1}"
 }
 
@@ -658,19 +715,24 @@ capabilities_command() {
         || die 2 "capabilities is machine-readable; run flywheel capabilities --json"
     local root=""
     local version="unknown"
+    local license_cleared="false"
     root="$(find_source_root 2>/dev/null || true)"
     if [[ -n "$root" && -r "$root/VERSION" ]]; then
         IFS= read -r version <"$root/VERSION"
     fi
-    python3 - "$version" <<'PY'
+    if [[ -n "$root" && -f "$root/config/flywheel-license-clearance.json" ]]; then
+        license_cleared="true"
+    fi
+    python3 - "$version" "$license_cleared" <<'PY'
 import json
 import sys
 
+license_cleared = sys.argv[2] == "true"
 print(json.dumps({
     "schema": "agent-flywheel.capabilities/v1",
     "contract_version": 1,
     "version": sys.argv[1],
-    "claim": "PARTIAL_SAFE",
+    "claim": "LICENSE_CLEARED_PARTIAL" if license_cleared else "PARTIAL_SAFE",
     "commands": [
         {"command": "flywheel mac install", "kind": "mutation"},
         {"command": "flywheel start", "kind": "mutation"},
@@ -686,7 +748,9 @@ print(json.dumps({
         "mac_ubuntu_vm": True,
         "portable_qualification_host": True,
         "repository_rollout_receipt": True,
-        "licensing_held_modules_executable": False,
+        "license_clearance_receipt": license_cleared,
+        "licensing_held_modules_executable": license_cleared,
+        "independent_qualification_holds_enforced": True,
     },
     "exit_codes": {
         "0": "success",
@@ -708,7 +772,7 @@ robot_docs_command() {
     cat <<'GUIDE'
 Agent Flywheel operator guide
 
-1. Install or converge the eight-module PARTIAL_SAFE environment:
+1. Install or converge the license-cleared private environment:
    flywheel mac install
 2. Start the isolated Ubuntu VM:
    flywheel start
@@ -726,9 +790,9 @@ Agent Flywheel operator guide
    flywheel rollout plan INVENTORY.json --json
 
 The status document reports exact source and bundle identities, current host
-qualification, installed and held modules, repository rollout evidence, and
-copy-pasteable remediation commands. PARTIAL_SAFE never authorizes any of the
-27 licensing-held modules.
+qualification, installed modules, independent holds, repository rollout
+evidence, and copy-pasteable remediation commands. License clearance does not
+override Agent Mail C5, PFR qualification, or live-repository authority.
 GUIDE
 }
 

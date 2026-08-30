@@ -1,0 +1,87 @@
+{
+  "schema": "agent-flywheel.license-clearance/v1",
+  "status": "LICENSE_CLEARED",
+  "recorded_on": "2026-08-30",
+  "authority": {
+    "kind": "operator_attestation",
+    "statement": "we have written approval for all modules. the licensing is okay.",
+    "written_grant_retained_by_operator": true,
+    "grant_artifact_disclosed_to_automation": false,
+    "external_grant_authentication_claimed_by_automation": false
+  },
+  "source_packets": {
+    "lic1_sha256": "9bfd85c340c6223482e07b96c668600e0db9a18b8a4f25e45f77f0129af63300",
+    "lic2_sha256": "89b56c5a62cea238a9e9d3b6ff88a2923a88bafd45c982a523dba5c7de5b51ee",
+    "lic3_sha256": "a0bc40c11289f603dbfdf2d5c60a25d9847db67bdc3e86b3cc6a47a6eea13e79"
+  },
+  "scope": {
+    "environment": "private_nonproduction",
+    "exact_revisions_only": true,
+    "public_distribution": false,
+    "release": false,
+    "upstream_contribution": false,
+    "production_hosting": false,
+    "external_deployment": false,
+    "model_training_or_dataset_use": false
+  },
+  "modules": [
+    {"id":"stack.beads_rust","repository":"Dicklesworthstone/beads_rust","commit":"7eaf34b76927b4deadc913889f50fb06a8f803d7"},
+    {"id":"stack.agent_settings_backup","repository":"Dicklesworthstone/agent_settings_backup_script","commit":"7a060386c06d50b7f4c1440fd1da15b2ee447bc4"},
+    {"id":"stack.caam","repository":"Dicklesworthstone/coding_agent_account_manager","commit":"afb72f80755a877c2e0037154e80771ad69fec91"},
+    {"id":"stack.cross_agent_session_resumer","repository":"Dicklesworthstone/cross_agent_session_resumer","commit":"37af44abc16a38c76990b25b163fe42e0d7fffd1"},
+    {"id":"stack.pcr","repository":"Dicklesworthstone/post_compact_reminder","commit":"c1f4811323dbf826fbf646dd85640b664fe6666b"},
+    {"id":"stack.automated_plan_reviser","repository":"Dicklesworthstone/automated_plan_reviser_pro","commit":"8357f66c0f2b5a6274cca489a57f0e3e1c042235"},
+    {"id":"stack.brenner_bot","repository":"Dicklesworthstone/brenner_bot","commit":"34a59a89846d14d7504523041eff960d2d80e434"},
+    {"id":"stack.eidetic_engine_cli","repository":"Dicklesworthstone/eidetic_engine_cli","commit":"0fc6801c91edc0764cf405b049024a25c3199e09"},
+    {"id":"stack.frankensearch","repository":"Dicklesworthstone/frankensearch","commit":"22859f74056c31fd3a713bacecd4a1f22f0cf82d"},
+    {"id":"stack.jeffreysprompts","repository":"Dicklesworthstone/jeffreysprompts.com","commit":"2cec2d5257ef0da32a856b51673f243b6c72a3e2"},
+    {"id":"stack.meta_skill","repository":"Dicklesworthstone/meta_skill","commit":"2a4bc62a04c98d8812bfe68b77c862d87e1731e3"},
+    {"id":"stack.pi_agent_rust","repository":"Dicklesworthstone/pi_agent_rust","commit":"e23c4622f8bc4038a5e061ee3640a0e9206ec5cc"},
+    {"id":"stack.process_triage","repository":"Dicklesworthstone/process_triage","commit":"7f455d51e5857c245a72cdea29a1ad84b1d942ad"},
+    {"id":"stack.rch","repository":"Dicklesworthstone/remote_compilation_helper","commit":"0a982fdee2ca5ce26791dd17b83285916a7b97f6"},
+    {"id":"stack.ru","repository":"Dicklesworthstone/repo_updater","commit":"72d8c6da4008a08480d7ef2e66fc165969248400"},
+    {"id":"stack.doodlestein_self_releaser","repository":"Dicklesworthstone/doodlestein_self_releaser","commit":"e10233a5dfb49b014ecb54b204af4cb553d58741"},
+    {"id":"stack.franken_markdown","repository":"Dicklesworthstone/franken_markdown","commit":"5637bad86e3c0deacab6411a734715015b143a12"},
+    {"id":"stack.slb","repository":"Dicklesworthstone/slb","commit":"707af1db44ed3070c0ff93db75f7720a53335320"},
+    {"id":"stack.srps","repository":"Dicklesworthstone/system_resource_protection_script","commit":"49288dd0dc37481b6f0a0a782d7c78ac123f201c"},
+    {"id":"stack.storage_ballast_helper","repository":"Dicklesworthstone/storage_ballast_helper","commit":"587c332962883d1fff40a183c2d0fb0ef615cfe6"},
+    {"id":"stack.mcp_agent_mail","repository":"Dicklesworthstone/mcp_agent_mail","commit":"7bce6f031bc29331d7e5aa09a9f67c75c2ab5430"},
+    {"id":"stack.beads_viewer","repository":"Dicklesworthstone/beads_viewer","commit":"95a706caf57fc5fde846a453da5f28677d4a81b8"},
+    {"id":"stack.ultimate_bug_scanner","repository":"Dicklesworthstone/ultimate_bug_scanner","commit":"0af10c926d6fbb14a1f589326d75c03f610207f0"},
+    {"id":"stack.dcg","repository":"Dicklesworthstone/destructive_command_guard","commit":"d1ada2d0136c64146726bdc13b7147b6023c3bad"},
+    {"id":"stack.cass","repository":"Dicklesworthstone/coding_agent_session_search","commit":"aa2023301a0253cb045eef77335dde16b53f41cf"},
+    {"id":"stack.cm","repository":"Dicklesworthstone/cass_memory_system","commit":"c173d50f29c2d0494312bf7930dbf22b8a26d860"},
+    {"id":"stack.ntm","repository":"Dicklesworthstone/ntm","commit":"415d479de50f6349d744a3f8d3f7a1b5d7d92a9b"}
+  ],
+  "license_gate": {
+    "cleared_count": 27,
+    "pending_count": 0
+  },
+  "commissioning": {
+    "claim": "LICENSE_CLEARED_PARTIAL",
+    "seed_modules": [
+      "users.ubuntu", "base.filesystem", "cli.modern", "lang.bun", "lang.uv", "lang.rust", "lang.go",
+      "stack.ntm", "stack.meta_skill", "stack.automated_plan_reviser", "stack.jeffreysprompts",
+      "stack.process_triage", "stack.ultimate_bug_scanner", "stack.beads_rust", "stack.beads_viewer",
+      "stack.cass", "stack.cm", "stack.caam", "stack.slb", "stack.dcg", "stack.ru",
+      "stack.brenner_bot", "stack.rch", "stack.srps", "stack.frankensearch",
+      "stack.storage_ballast_helper", "stack.cross_agent_session_resumer",
+      "stack.doodlestein_self_releaser", "stack.agent_settings_backup", "stack.pcr",
+      "stack.eidetic_engine_cli", "stack.franken_markdown", "stack.pi_agent_rust"
+    ],
+    "resolved_modules": [
+      "base.system", "users.ubuntu", "base.filesystem", "cli.modern", "lang.bun", "lang.uv", "lang.rust", "lang.go",
+      "tools.ast_grep", "agents.claude", "stack.ntm", "stack.meta_skill",
+      "stack.automated_plan_reviser", "stack.jeffreysprompts", "stack.process_triage",
+      "stack.ultimate_bug_scanner", "stack.beads_rust", "stack.beads_viewer", "stack.cass",
+      "stack.cm", "stack.caam", "stack.slb", "stack.dcg", "stack.ru", "stack.brenner_bot",
+      "stack.rch", "stack.srps", "stack.frankensearch", "stack.storage_ballast_helper",
+      "stack.cross_agent_session_resumer", "stack.doodlestein_self_releaser",
+      "stack.agent_settings_backup", "stack.pcr", "stack.eidetic_engine_cli",
+      "stack.franken_markdown", "stack.pi_agent_rust"
+    ],
+    "independent_holds": ["stack.mcp_agent_mail", "stack.power_failure_resumer"],
+    "fully_commissioned": false
+  },
+  "independent_holds_preserved": true
+}

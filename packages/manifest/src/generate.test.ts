@@ -637,16 +637,24 @@ describe('Generated verified installer args', () => {
     expect(agentsContent).toContain('acfs_link_primary_bin_command() {');
   });
 
-  test('stack.meta_skill fails closed on Linux ARM64 without anchored source', () => {
+  test('stack.meta_skill uses an exact locked source build on Linux ARM64', () => {
     const stackPath = resolve(GENERATED_DIR, 'install_stack.sh');
     expect(existsSync(stackPath)).toBe(true);
     const stackContent = readFileSync(stackPath, 'utf-8');
 
-    expect(stackContent).toContain('meta_skill has no checksum-anchored Linux ARM64 install source yet');
+    expect(stackContent).toContain('meta_skill does not publish a Linux ARM64 binary');
     expect(stackContent).toContain('[[ "$(uname -s 2>/dev/null)" == "Linux" ]]');
     expect(stackContent).toContain('[[ "$(uname -m 2>/dev/null)" == "aarch64" ]]');
     expect(stackContent).toContain('[[ "$(uname -m 2>/dev/null)" == "arm64" ]]');
-    expect(stackContent).toContain('Linux ARM64 is unsupported until a checksum-anchored artifact or source revision is available');
+    expect(stackContent).toContain('ms_source_commit="2a4bc62a04c98d8812bfe68b77c862d87e1731e3"');
+    expect(stackContent).toContain('ms_source_tree="956bd9e6426d120341d50a30722b41ddd7f688c7"');
+    expect(stackContent).toContain('ms_cargo_lock_sha256="d7684ea8c8392092df67e2aee4fb9e74fae0359389572760235217838a5c3181"');
+    expect(stackContent).toContain('ms_cargo_toml_sha256="9f0dc83afc2f236d4c4af16dbd16fc1639a9f0d00e07db23f949482c5eeeda4f"');
+    expect(stackContent).toContain('clone --filter=blob:none --no-checkout "$ms_source_repo"');
+    expect(stackContent).toContain('checkout --detach "$ms_source_commit"');
+    expect(stackContent).toContain('build --release --locked --bin ms');
+    expect(stackContent).toContain('[[ "$ms_version" == "ms 0.2.2" ]]');
+    expect(stackContent).toContain('acfs_install_executable_into_primary_bin "$ms_binary" ms');
     expect(stackContent).not.toContain('cargo install --git https://github.com/Dicklesworthstone/meta_skill');
   });
 

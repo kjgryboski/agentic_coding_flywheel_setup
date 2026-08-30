@@ -717,7 +717,7 @@ test_generated_target_home_fallbacks_are_dynamic() {
 }
 
 test_meta_skill_arm64_linux_guidance() {
-    harness_section "Test: meta_skill ARM64 Linux guidance is specific"
+    harness_section "Test: meta_skill ARM64 Linux guidance names exact source route"
 
     local doctor_file arm64_branch
     doctor_file="$REPO_ROOT/scripts/lib/doctor.sh"
@@ -728,17 +728,17 @@ test_meta_skill_arm64_linux_guidance() {
         return 1
     fi
 
-    if echo "$arm64_branch" | grep -q 'ARM64 Linux binary not yet available (see https://github.com/Dicklesworthstone/meta_skill/issues/1)'; then
-        harness_pass "meta_skill ARM64 Linux warning includes the upstream issue link"
+    if echo "$arm64_branch" | grep -q 'exact locked ARM64 source build is available'; then
+        harness_pass "meta_skill ARM64 Linux warning names the locked source build"
     else
-        harness_fail "meta_skill ARM64 Linux warning is missing the specific upstream guidance"
+        harness_fail "meta_skill ARM64 Linux warning is missing the locked-source guidance"
         harness_capture_output "meta_skill_arm64_branch" "$arm64_branch"
     fi
 
-    if echo "$arm64_branch" | grep -q 'No checksum-anchored Linux ARM64 installer is available; wait for a verified release artifact'; then
-        harness_pass "meta_skill ARM64 Linux guidance fails closed without an anchored source"
+    if echo "$arm64_branch" | grep -q 'approved commit 2a4bc62a04c98d8812bfe68b77c862d87e1731e3'; then
+        harness_pass "meta_skill ARM64 Linux guidance binds the approved source revision"
     else
-        harness_fail "meta_skill ARM64 Linux guidance does not explain the anchored-source requirement"
+        harness_fail "meta_skill ARM64 Linux guidance does not bind the approved source revision"
         harness_capture_output "meta_skill_arm64_branch" "$arm64_branch"
     fi
 

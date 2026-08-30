@@ -81,36 +81,36 @@ acfs_require_contract() {
 # caller-supplied environment values cannot turn a HOLD or an out-of-plan
 # module into runtime authority.
 ACFS_R1_RUNTIME_PROFILE_ID="R1-held-module-exclusion-runtime-v1"
-ACFS_R1_RUNTIME_PROFILE_SHA256="3dd1bf41b051765c36cc75c210a6482d624fc85448cfba02841300eff8ce2bdc"
+ACFS_R1_RUNTIME_PROFILE_SHA256="8674192711d5bdf0257e5a78bf9a7f13511dacabba844a219fb00a389c797b24"
 ACFS_R1_SOURCE_JSON_SHA256="33bca439667099cc56b98539aa825658a5f2f72f5d9dbd28d9212ab9cf3a427c"
 ACFS_R1_SOURCE_MD_SHA256="7141b4fa4c5362a44f7f0f61bdec7a7eef9b4bfbc6f8c3f408bb4ab8d18ca37b"
 ACFS_R1_U5V2_VERIFIER_SHA256="e70a27302ec46439f51797b4945ae54aae81ce9e4d49daa7bbc3e971cfc24445"
 ACFS_R1_U5_BASE_COMMIT="890bd2e235c3f29a94029b6d4b3c4308abb6f027"
 ACFS_R1_U5_BASE_TREE="8e1da65b3345a25fdac54eec3959932a70bab5fd"
 ACFS_R1_MANIFEST_SHA256="61fed87a0aa299fc6e6c657afb23845ec46137392393d0113e8d11b50b7dda65"
-ACFS_R1_GENERATOR_SHA256="db0fa865c687630ec9b6290db9039ad457c5a8f0bc64f604af5c46a95ac0ea6f"
+ACFS_R1_GENERATOR_SHA256="69b8b982f8aecb31a0cfbeee8dd205f174b7449489c190f279fa3a03fe880a5a"
 ACFS_R1_MANIFEST_INDEX_SHA256="6329351b2b546ee5ee5ac3b00535972664a246bcc907175a4d7f45d2f377beae"
-ACFS_R1_INSTALL_SH_SHA256="3a47aefccdc35e92afe39c50c22071f29b25bfa3c4bb41d9f2147f752797c764"
-ACFS_R1_SECURITY_SHA256="047fae70c75de78e903654f7a59e94f7ef510c26d4dbf0face1ade7696cd89be"
+ACFS_R1_INSTALL_SH_SHA256="8c33c739c267517191d7d36c95d99078e16c93bc33968634bb29d3207685153d"
+ACFS_R1_SECURITY_SHA256="1b6517e6569f9db612252c5a67d0402cb9edd6031d7ba661f2b7ec4eaa325990"
 ACFS_R1_CHECKSUMS_SHA256="36bbd2eba33e6ef70871f8c321623ba6d0b46720569c23b7ea5f1e91c9d0e83c"
-ACFS_R1_INSTALL_HELPERS_SHA256="707e771ceebc84c8a2bbe043059fb1ed361bb10fffc8ce3314ccba949839f07f"
-ACFS_R1_PROGRESS_SHA256="c75a9d6ff3c4be155b892344e135ed12b99ca444a1e6dca61d491f200d3719a7"
+ACFS_R1_INSTALL_HELPERS_SHA256="f49ae5e3b99bc7f1156f3233f857ffec2e3f5f4e6726582bad87a04842de144e"
+ACFS_R1_PROGRESS_SHA256="002020f863a734e4d42826e602cdc98ee0e147c3cc5da954184ace70a8a146fe"
 ACFS_R1_MODULE_SELECTOR_SHA256="b524b6179e6eed45852d876043e17ff5563bbfb32b22401752ff9d11079c61b0"
-ACFS_R1_EXPORT_CONFIG_SHA256="0cfa29731605ca45377a6e10fdd8e261bc16aff7de8219af67542c35a017e787"
+ACFS_R1_EXPORT_CONFIG_SHA256="a81b7fb2a3a646c68201067cc2f634234e5e4ae2f1c917eecb86a1d026eae957"
 ACFS_R1_STATE_SHA256="76409a938231e88a3232d65ccbca095f1b505bee893eaa463b33b851df6a0813"
-ACFS_R1_STACK_SHA256="4350275e6776d76a496cd9ee8ddb3e10449e2836c6dece032503e17e7d674e58"
-ACFS_R1_UPDATE_SHA256="4774a90d8911b5c18e6aafb5e33114314c85188aeaa22e6777b2a20e6a054043"
-ACFS_R1_DOCTOR_SHA256="ffdacc227261ea77b1798dc7b4a97aeb2ccfc2875acf6b764350131c7b74994a"
+ACFS_R1_STACK_SHA256="61a782e0ed36db569cbd6d48027c850fc2df058636fdcd3caad06d05e8a68f03"
+ACFS_R1_UPDATE_SHA256="c3ca1579f08f1a66fa421d6ea761ff8e6369cb2aa9d6b223163f8537ac3346a0"
+ACFS_R1_DOCTOR_SHA256="b128d9e9963fc6fb7ff2e38ad887247b26db8ae8ae1185e1d06ca55d898e20c6"
 ACFS_R1_DOCTOR_FIX_SHA256="5abc547533c4074630c973cac403a393497954a30952f24d755d52f456882b22"
 ACFS_R1_SERVICES_SHA256="eba54b8c1b54974fccc56a969e702c5e8f9f928a334692736ff53ddf1ebd68f5"
-ACFS_R1_GENERATED_BASE_SHA256="a7d9e2d5f2aa028cfb83f1c470c0e3eb95447f4f80dd5eab0201c9c47ae12391"
+ACFS_R1_GENERATED_BASE_SHA256="45ff6427c3668dec98682eb98c7812dc106fafec79b1bd6152cc48ad9f5e2c3a"
 ACFS_R1_GENERATED_USERS_SHA256="b90a4abab9dd9414ccfcac98ef4c09c57dc96950294a469bd58e984b4a68826c"
-ACFS_R1_GENERATED_FILESYSTEM_SHA256="f9b22dfc41c435be31f863fc7ad37f9ebaf6e795dac5b87d4be78eca28fc51ab"
-ACFS_R1_GENERATED_CLI_SHA256="1871b26476c88926c107c047d83cb90eb0cb2a0c3ab0bafbe632b6989e6247b6"
-ACFS_R1_GENERATED_LANG_SHA256="6976f5724294934aa320da4ac50323d69d22349184f5ec60a632df5fca8605c1"
-ACFS_R1_GENERATED_STACK_SHA256="ac6c6138410d71f94ebd8231707d7994b182c01d241678341fb952c64cce6320"
+ACFS_R1_GENERATED_FILESYSTEM_SHA256="0eb9c0a1261face0f41de214e19c71c0e06d238dd5ef701a9fcc86f1d1e2a9b2"
+ACFS_R1_GENERATED_CLI_SHA256="3c75d1b7cea8dc795a2a92bcf19f5382c8ae1a4af0a7a2c038c262c69b9cb05e"
+ACFS_R1_GENERATED_LANG_SHA256="ae6540ed3e558c5e214e6b017866d89ce45237e5ef469cd18ba6c0a1de33cf7c"
+ACFS_R1_GENERATED_STACK_SHA256="11503390f096c7ac327666441f245f556f12affeab759369c744cb30dd04ad97"
 ACFS_R1_GENERATED_DOCTOR_SHA256="5e3389aac6674ad652b58e54ee9f5147ac4fe885ec34271777ee6411d597be1e"
-ACFS_W2_GENERATED_PARTIAL_SAFE_SHA256="88a375113e99108f6567bd210ac38cb5f0d268de109890da36d5056c1b4942b3"
+ACFS_W2_GENERATED_PARTIAL_SAFE_SHA256="d51af7ec4edc06c7d3b7551eacaa2411a0dd2c62e11bfb7d5fccac051a03bf7b"
 ACFS_R1_SEED_CSV="users.ubuntu,base.filesystem,cli.modern,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer"
 ACFS_R1_PLAN_CSV="base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer"
 ACFS_R1_HELD_CSV="stack.caam,stack.slb,stack.srps,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.franken_markdown,stack.power_failure_resumer"
@@ -132,6 +132,74 @@ ACFS_LICENSE_HELD_CSV="stack.beads_rust,stack.agent_settings_backup,stack.caam,s
 ACFS_LICENSE_PLAIN_MIT_ONLY_CSV="stack.power_failure_resumer"
 ACFS_LICENSE_R1_PLAN_HELD_CSV="stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer"
 ACFS_LICENSE_POLICY_REASON=""
+
+# Written permission is a separate, explicit authority. The runtime accepts
+# only this exact content-bound receipt, supplied as an absolute immutable
+# file owned by the commissioning identity. The receipt clears the license
+# gate for all 27 exact revisions but does not clear independent qualification
+# holds. Agent Mail therefore remains outside the first expanded commissioning
+# plan until its C5 source-build/authentication capsule is independently
+# accepted; PFR retains its pre-existing non-license qualification HOLD.
+ACFS_LICENSE_CLEARANCE_SHA256="90b9e45ea3e5f2db4b409d38b539df2aef80b3a6a4faf69ec699d0cfa5515c68"
+ACFS_W3_COMMISSIONING_SEED_CSV="users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,stack.ntm,stack.meta_skill,stack.automated_plan_reviser,stack.jeffreysprompts,stack.process_triage,stack.ultimate_bug_scanner,stack.beads_rust,stack.beads_viewer,stack.cass,stack.cm,stack.caam,stack.slb,stack.dcg,stack.ru,stack.brenner_bot,stack.rch,stack.srps,stack.frankensearch,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.eidetic_engine_cli,stack.franken_markdown,stack.pi_agent_rust"
+ACFS_W3_COMMISSIONING_PLAN_CSV="base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,tools.ast_grep,agents.claude,stack.ntm,stack.meta_skill,stack.automated_plan_reviser,stack.jeffreysprompts,stack.process_triage,stack.ultimate_bug_scanner,stack.beads_rust,stack.beads_viewer,stack.cass,stack.cm,stack.caam,stack.slb,stack.dcg,stack.ru,stack.brenner_bot,stack.rch,stack.srps,stack.frankensearch,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.eidetic_engine_cli,stack.franken_markdown,stack.pi_agent_rust"
+ACFS_LICENSE_CLEARANCE_POLICY_REASON=""
+
+acfs_license_clearance_requested() {
+    [[ -n "${ACFS_LICENSE_CLEARANCE_FILE:-}" ]]
+}
+
+acfs_license_clearance_verify() {
+    local clearance="${ACFS_LICENSE_CLEARANCE_FILE:-}"
+    local canonical=""
+    local actual_sha256=""
+    local mode=""
+    local links=""
+    local owner=""
+
+    ACFS_LICENSE_CLEARANCE_POLICY_REASON=""
+    if acfs_w2_partial_safe_requested; then
+        ACFS_LICENSE_CLEARANCE_POLICY_REASON="license clearance and PARTIAL_SAFE authorities are mutually exclusive"
+        return 1
+    fi
+    if [[ -z "$clearance" || "$clearance" != /* || ! -f "$clearance" || -L "$clearance" ]]; then
+        ACFS_LICENSE_CLEARANCE_POLICY_REASON="license clearance receipt is missing, non-absolute, nonregular, or a symlink"
+        return 1
+    fi
+    canonical="$(cd "$(dirname "$clearance")" 2>/dev/null && printf '%s/%s\n' "$PWD" "$(basename "$clearance")")"
+    if [[ -z "$canonical" || "$canonical" != "$clearance" ]]; then
+        ACFS_LICENSE_CLEARANCE_POLICY_REASON="license clearance receipt path is not canonical"
+        return 1
+    fi
+    if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
+        mode="$(/usr/bin/stat -f '%Lp' "$clearance" 2>/dev/null || true)"
+        links="$(/usr/bin/stat -f '%l' "$clearance" 2>/dev/null || true)"
+        owner="$(/usr/bin/stat -f '%u' "$clearance" 2>/dev/null || true)"
+    else
+        mode="$(/usr/bin/stat -c '%a' "$clearance" 2>/dev/null || true)"
+        links="$(/usr/bin/stat -c '%h' "$clearance" 2>/dev/null || true)"
+        owner="$(/usr/bin/stat -c '%u' "$clearance" 2>/dev/null || true)"
+    fi
+    if [[ ! "$mode" =~ ^[0-7]{3,4}$ ]] || (( (8#$mode & 8#222) != 0 )); then
+        ACFS_LICENSE_CLEARANCE_POLICY_REASON="license clearance receipt must have no write bits"
+        return 1
+    fi
+    if [[ "$links" != "1" || "$owner" != "$EUID" ]]; then
+        ACFS_LICENSE_CLEARANCE_POLICY_REASON="license clearance receipt must be single-link and owned by the commissioning identity"
+        return 1
+    fi
+    actual_sha256="$(_acfs_r1_sha256_file "$clearance" 2>/dev/null || true)"
+    if [[ "$actual_sha256" != "$ACFS_LICENSE_CLEARANCE_SHA256" ]]; then
+        ACFS_LICENSE_CLEARANCE_POLICY_REASON="license clearance receipt digest mismatch"
+        return 1
+    fi
+    return 0
+}
+
+acfs_license_clearance_active() {
+    acfs_license_clearance_requested || return 1
+    acfs_license_clearance_verify
+}
 
 # W2 adds a separate, explicit commissioning authority without changing the
 # U6/R1 default HOLD.  The caller must name the exact immutable allowlist file;
@@ -248,29 +316,29 @@ u5v2_verifier_sha256=e70a27302ec46439f51797b4945ae54aae81ce9e4d49daa7bbc3e971cfc
 u5_base_commit=890bd2e235c3f29a94029b6d4b3c4308abb6f027
 u5_base_tree=8e1da65b3345a25fdac54eec3959932a70bab5fd
 manifest_sha256=61fed87a0aa299fc6e6c657afb23845ec46137392393d0113e8d11b50b7dda65
-generator_sha256=db0fa865c687630ec9b6290db9039ad457c5a8f0bc64f604af5c46a95ac0ea6f
+generator_sha256=69b8b982f8aecb31a0cfbeee8dd205f174b7449489c190f279fa3a03fe880a5a
 manifest_index_sha256=6329351b2b546ee5ee5ac3b00535972664a246bcc907175a4d7f45d2f377beae
-install_sh_sha256=3a47aefccdc35e92afe39c50c22071f29b25bfa3c4bb41d9f2147f752797c764
-security_sha256=047fae70c75de78e903654f7a59e94f7ef510c26d4dbf0face1ade7696cd89be
+install_sh_sha256=8c33c739c267517191d7d36c95d99078e16c93bc33968634bb29d3207685153d
+security_sha256=1b6517e6569f9db612252c5a67d0402cb9edd6031d7ba661f2b7ec4eaa325990
 checksums_sha256=36bbd2eba33e6ef70871f8c321623ba6d0b46720569c23b7ea5f1e91c9d0e83c
-install_helpers_sha256=707e771ceebc84c8a2bbe043059fb1ed361bb10fffc8ce3314ccba949839f07f
-progress_sha256=c75a9d6ff3c4be155b892344e135ed12b99ca444a1e6dca61d491f200d3719a7
+install_helpers_sha256=f49ae5e3b99bc7f1156f3233f857ffec2e3f5f4e6726582bad87a04842de144e
+progress_sha256=002020f863a734e4d42826e602cdc98ee0e147c3cc5da954184ace70a8a146fe
 module_selector_sha256=b524b6179e6eed45852d876043e17ff5563bbfb32b22401752ff9d11079c61b0
-export_config_sha256=0cfa29731605ca45377a6e10fdd8e261bc16aff7de8219af67542c35a017e787
+export_config_sha256=a81b7fb2a3a646c68201067cc2f634234e5e4ae2f1c917eecb86a1d026eae957
 state_sha256=76409a938231e88a3232d65ccbca095f1b505bee893eaa463b33b851df6a0813
-stack_sha256=4350275e6776d76a496cd9ee8ddb3e10449e2836c6dece032503e17e7d674e58
-update_sha256=4774a90d8911b5c18e6aafb5e33114314c85188aeaa22e6777b2a20e6a054043
-doctor_sha256=ffdacc227261ea77b1798dc7b4a97aeb2ccfc2875acf6b764350131c7b74994a
+stack_sha256=61a782e0ed36db569cbd6d48027c850fc2df058636fdcd3caad06d05e8a68f03
+update_sha256=c3ca1579f08f1a66fa421d6ea761ff8e6369cb2aa9d6b223163f8537ac3346a0
+doctor_sha256=b128d9e9963fc6fb7ff2e38ad887247b26db8ae8ae1185e1d06ca55d898e20c6
 doctor_fix_sha256=5abc547533c4074630c973cac403a393497954a30952f24d755d52f456882b22
 services_sha256=eba54b8c1b54974fccc56a969e702c5e8f9f928a334692736ff53ddf1ebd68f5
-generated_base_sha256=a7d9e2d5f2aa028cfb83f1c470c0e3eb95447f4f80dd5eab0201c9c47ae12391
+generated_base_sha256=45ff6427c3668dec98682eb98c7812dc106fafec79b1bd6152cc48ad9f5e2c3a
 generated_users_sha256=b90a4abab9dd9414ccfcac98ef4c09c57dc96950294a469bd58e984b4a68826c
-generated_filesystem_sha256=f9b22dfc41c435be31f863fc7ad37f9ebaf6e795dac5b87d4be78eca28fc51ab
-generated_cli_sha256=1871b26476c88926c107c047d83cb90eb0cb2a0c3ab0bafbe632b6989e6247b6
-generated_lang_sha256=6976f5724294934aa320da4ac50323d69d22349184f5ec60a632df5fca8605c1
-generated_stack_sha256=ac6c6138410d71f94ebd8231707d7994b182c01d241678341fb952c64cce6320
+generated_filesystem_sha256=0eb9c0a1261face0f41de214e19c71c0e06d238dd5ef701a9fcc86f1d1e2a9b2
+generated_cli_sha256=3c75d1b7cea8dc795a2a92bcf19f5382c8ae1a4af0a7a2c038c262c69b9cb05e
+generated_lang_sha256=ae6540ed3e558c5e214e6b017866d89ce45237e5ef469cd18ba6c0a1de33cf7c
+generated_stack_sha256=11503390f096c7ac327666441f245f556f12affeab759369c744cb30dd04ad97
 generated_doctor_sha256=5e3389aac6674ad652b58e54ee9f5147ac4fe885ec34271777ee6411d597be1e
-w2_generated_partial_safe_sha256=88a375113e99108f6567bd210ac38cb5f0d268de109890da36d5056c1b4942b3
+w2_generated_partial_safe_sha256=d51af7ec4edc06c7d3b7551eacaa2411a0dd2c62e11bfb7d5fccac051a03bf7b
 license_exclusion_profile_id=LICX-core-guide-license-exclusion-v1
 license_exclusion_profile_sha256=f7e9575697b7e6d18f5059c92430a01fb0bbd43b944c3b1073be4804badbe513
 lic1_sha256=9bfd85c340c6223482e07b96c668600e0db9a18b8a4f25e45f77f0129af63300
@@ -278,6 +346,10 @@ lic2_sha256=89b56c5a62cea238a9e9d3b6ff88a2923a88bafd45c982a523dba5c7de5b51ee
 license_held_modules=stack.beads_rust,stack.agent_settings_backup,stack.caam,stack.cross_agent_session_resumer,stack.pcr,stack.automated_plan_reviser,stack.brenner_bot,stack.eidetic_engine_cli,stack.frankensearch,stack.jeffreysprompts,stack.meta_skill,stack.pi_agent_rust,stack.process_triage,stack.rch,stack.ru,stack.doodlestein_self_releaser,stack.franken_markdown,stack.slb,stack.srps,stack.storage_ballast_helper,stack.mcp_agent_mail,stack.beads_viewer,stack.ultimate_bug_scanner,stack.dcg,stack.cass,stack.cm,stack.ntm
 license_plain_mit_only=stack.power_failure_resumer
 license_r1_plan_held=stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer
+license_clearance_sha256=90b9e45ea3e5f2db4b409d38b539df2aef80b3a6a4faf69ec699d0cfa5515c68
+w3_commissioning_seeds=users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,stack.ntm,stack.meta_skill,stack.automated_plan_reviser,stack.jeffreysprompts,stack.process_triage,stack.ultimate_bug_scanner,stack.beads_rust,stack.beads_viewer,stack.cass,stack.cm,stack.caam,stack.slb,stack.dcg,stack.ru,stack.brenner_bot,stack.rch,stack.srps,stack.frankensearch,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.eidetic_engine_cli,stack.franken_markdown,stack.pi_agent_rust
+w3_commissioning_plan=base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,tools.ast_grep,agents.claude,stack.ntm,stack.meta_skill,stack.automated_plan_reviser,stack.jeffreysprompts,stack.process_triage,stack.ultimate_bug_scanner,stack.beads_rust,stack.beads_viewer,stack.cass,stack.cm,stack.caam,stack.slb,stack.dcg,stack.ru,stack.brenner_bot,stack.rch,stack.srps,stack.frankensearch,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.eidetic_engine_cli,stack.franken_markdown,stack.pi_agent_rust
+w3_independent_holds=stack.mcp_agent_mail,stack.power_failure_resumer
 explicit_seeds=users.ubuntu,base.filesystem,cli.modern,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer
 resolved_plan=base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer
 held_modules=stack.caam,stack.slb,stack.srps,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.franken_markdown,stack.power_failure_resumer
@@ -396,13 +468,25 @@ acfs_license_policy_admit_entry() {
             ;;
     esac
 
+    if acfs_license_clearance_requested && ! acfs_license_clearance_verify; then
+        ACFS_LICENSE_POLICY_REASON="${ACFS_LICENSE_CLEARANCE_POLICY_REASON:-license clearance receipt verification failed}"
+        return 1
+    fi
+
     if [[ -n "$module_id" ]]; then
         if acfs_license_policy_module_is_held "$module_id"; then
+            if acfs_license_clearance_active; then
+                return 0
+            fi
             ACFS_LICENSE_POLICY_REASON="LIC1+LIC2 HOLD rejects $module_id before $entry; express written permission is absent (LIC1 $ACFS_LICENSE_LIC1_SHA256; LIC2 $ACFS_LICENSE_LIC2_SHA256)"
             return 1
         fi
         # PFR is license-only plain MIT.  This function records that narrow
         # classification; the R1 qualification HOLD still rejects it later.
+        return 0
+    fi
+
+    if acfs_license_clearance_active; then
         return 0
     fi
 
@@ -451,36 +535,39 @@ acfs_r1_runtime_verify_profile() {
         return 1
     fi
     if [[ "${ACFS_R1_RUNTIME_PROFILE_ID:-}" != "R1-held-module-exclusion-runtime-v1" \
-        || "${ACFS_R1_RUNTIME_PROFILE_SHA256:-}" != "3dd1bf41b051765c36cc75c210a6482d624fc85448cfba02841300eff8ce2bdc" \
+        || "${ACFS_R1_RUNTIME_PROFILE_SHA256:-}" != "8674192711d5bdf0257e5a78bf9a7f13511dacabba844a219fb00a389c797b24" \
         || "${ACFS_R1_SOURCE_JSON_SHA256:-}" != "33bca439667099cc56b98539aa825658a5f2f72f5d9dbd28d9212ab9cf3a427c" \
         || "${ACFS_R1_SOURCE_MD_SHA256:-}" != "7141b4fa4c5362a44f7f0f61bdec7a7eef9b4bfbc6f8c3f408bb4ab8d18ca37b" \
         || "${ACFS_R1_U5V2_VERIFIER_SHA256:-}" != "e70a27302ec46439f51797b4945ae54aae81ce9e4d49daa7bbc3e971cfc24445" \
         || "${ACFS_R1_U5_BASE_COMMIT:-}" != "890bd2e235c3f29a94029b6d4b3c4308abb6f027" \
         || "${ACFS_R1_U5_BASE_TREE:-}" != "8e1da65b3345a25fdac54eec3959932a70bab5fd" \
         || "${ACFS_R1_MANIFEST_SHA256:-}" != "61fed87a0aa299fc6e6c657afb23845ec46137392393d0113e8d11b50b7dda65" \
-        || "${ACFS_R1_GENERATOR_SHA256:-}" != "db0fa865c687630ec9b6290db9039ad457c5a8f0bc64f604af5c46a95ac0ea6f" \
+        || "${ACFS_R1_GENERATOR_SHA256:-}" != "69b8b982f8aecb31a0cfbeee8dd205f174b7449489c190f279fa3a03fe880a5a" \
         || "${ACFS_R1_MANIFEST_INDEX_SHA256:-}" != "6329351b2b546ee5ee5ac3b00535972664a246bcc907175a4d7f45d2f377beae" \
-        || "${ACFS_R1_INSTALL_SH_SHA256:-}" != "3a47aefccdc35e92afe39c50c22071f29b25bfa3c4bb41d9f2147f752797c764" \
-        || "${ACFS_R1_SECURITY_SHA256:-}" != "047fae70c75de78e903654f7a59e94f7ef510c26d4dbf0face1ade7696cd89be" \
+        || "${ACFS_R1_INSTALL_SH_SHA256:-}" != "8c33c739c267517191d7d36c95d99078e16c93bc33968634bb29d3207685153d" \
+        || "${ACFS_R1_SECURITY_SHA256:-}" != "1b6517e6569f9db612252c5a67d0402cb9edd6031d7ba661f2b7ec4eaa325990" \
         || "${ACFS_R1_CHECKSUMS_SHA256:-}" != "36bbd2eba33e6ef70871f8c321623ba6d0b46720569c23b7ea5f1e91c9d0e83c" \
-        || "${ACFS_R1_INSTALL_HELPERS_SHA256:-}" != "707e771ceebc84c8a2bbe043059fb1ed361bb10fffc8ce3314ccba949839f07f" \
-        || "${ACFS_R1_PROGRESS_SHA256:-}" != "c75a9d6ff3c4be155b892344e135ed12b99ca444a1e6dca61d491f200d3719a7" \
+        || "${ACFS_R1_INSTALL_HELPERS_SHA256:-}" != "f49ae5e3b99bc7f1156f3233f857ffec2e3f5f4e6726582bad87a04842de144e" \
+        || "${ACFS_R1_PROGRESS_SHA256:-}" != "002020f863a734e4d42826e602cdc98ee0e147c3cc5da954184ace70a8a146fe" \
         || "${ACFS_R1_MODULE_SELECTOR_SHA256:-}" != "b524b6179e6eed45852d876043e17ff5563bbfb32b22401752ff9d11079c61b0" \
-        || "${ACFS_R1_EXPORT_CONFIG_SHA256:-}" != "0cfa29731605ca45377a6e10fdd8e261bc16aff7de8219af67542c35a017e787" \
+        || "${ACFS_R1_EXPORT_CONFIG_SHA256:-}" != "a81b7fb2a3a646c68201067cc2f634234e5e4ae2f1c917eecb86a1d026eae957" \
         || "${ACFS_R1_STATE_SHA256:-}" != "76409a938231e88a3232d65ccbca095f1b505bee893eaa463b33b851df6a0813" \
-        || "${ACFS_R1_STACK_SHA256:-}" != "4350275e6776d76a496cd9ee8ddb3e10449e2836c6dece032503e17e7d674e58" \
-        || "${ACFS_R1_UPDATE_SHA256:-}" != "4774a90d8911b5c18e6aafb5e33114314c85188aeaa22e6777b2a20e6a054043" \
-        || "${ACFS_R1_DOCTOR_SHA256:-}" != "ffdacc227261ea77b1798dc7b4a97aeb2ccfc2875acf6b764350131c7b74994a" \
+        || "${ACFS_R1_STACK_SHA256:-}" != "61a782e0ed36db569cbd6d48027c850fc2df058636fdcd3caad06d05e8a68f03" \
+        || "${ACFS_R1_UPDATE_SHA256:-}" != "c3ca1579f08f1a66fa421d6ea761ff8e6369cb2aa9d6b223163f8537ac3346a0" \
+        || "${ACFS_R1_DOCTOR_SHA256:-}" != "b128d9e9963fc6fb7ff2e38ad887247b26db8ae8ae1185e1d06ca55d898e20c6" \
         || "${ACFS_R1_DOCTOR_FIX_SHA256:-}" != "5abc547533c4074630c973cac403a393497954a30952f24d755d52f456882b22" \
         || "${ACFS_R1_SERVICES_SHA256:-}" != "eba54b8c1b54974fccc56a969e702c5e8f9f928a334692736ff53ddf1ebd68f5" \
-        || "${ACFS_R1_GENERATED_BASE_SHA256:-}" != "a7d9e2d5f2aa028cfb83f1c470c0e3eb95447f4f80dd5eab0201c9c47ae12391" \
+        || "${ACFS_R1_GENERATED_BASE_SHA256:-}" != "45ff6427c3668dec98682eb98c7812dc106fafec79b1bd6152cc48ad9f5e2c3a" \
         || "${ACFS_R1_GENERATED_USERS_SHA256:-}" != "b90a4abab9dd9414ccfcac98ef4c09c57dc96950294a469bd58e984b4a68826c" \
-        || "${ACFS_R1_GENERATED_FILESYSTEM_SHA256:-}" != "f9b22dfc41c435be31f863fc7ad37f9ebaf6e795dac5b87d4be78eca28fc51ab" \
-        || "${ACFS_R1_GENERATED_CLI_SHA256:-}" != "1871b26476c88926c107c047d83cb90eb0cb2a0c3ab0bafbe632b6989e6247b6" \
-        || "${ACFS_R1_GENERATED_LANG_SHA256:-}" != "6976f5724294934aa320da4ac50323d69d22349184f5ec60a632df5fca8605c1" \
-        || "${ACFS_R1_GENERATED_STACK_SHA256:-}" != "ac6c6138410d71f94ebd8231707d7994b182c01d241678341fb952c64cce6320" \
+        || "${ACFS_R1_GENERATED_FILESYSTEM_SHA256:-}" != "0eb9c0a1261face0f41de214e19c71c0e06d238dd5ef701a9fcc86f1d1e2a9b2" \
+        || "${ACFS_R1_GENERATED_CLI_SHA256:-}" != "3c75d1b7cea8dc795a2a92bcf19f5382c8ae1a4af0a7a2c038c262c69b9cb05e" \
+        || "${ACFS_R1_GENERATED_LANG_SHA256:-}" != "ae6540ed3e558c5e214e6b017866d89ce45237e5ef469cd18ba6c0a1de33cf7c" \
+        || "${ACFS_R1_GENERATED_STACK_SHA256:-}" != "11503390f096c7ac327666441f245f556f12affeab759369c744cb30dd04ad97" \
         || "${ACFS_R1_GENERATED_DOCTOR_SHA256:-}" != "5e3389aac6674ad652b58e54ee9f5147ac4fe885ec34271777ee6411d597be1e" \
-        || "${ACFS_W2_GENERATED_PARTIAL_SAFE_SHA256:-}" != "88a375113e99108f6567bd210ac38cb5f0d268de109890da36d5056c1b4942b3" \
+        || "${ACFS_W2_GENERATED_PARTIAL_SAFE_SHA256:-}" != "d51af7ec4edc06c7d3b7551eacaa2411a0dd2c62e11bfb7d5fccac051a03bf7b" \
+        || "${ACFS_LICENSE_CLEARANCE_SHA256:-}" != "90b9e45ea3e5f2db4b409d38b539df2aef80b3a6a4faf69ec699d0cfa5515c68" \
+        || "${ACFS_W3_COMMISSIONING_SEED_CSV:-}" != "users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,stack.ntm,stack.meta_skill,stack.automated_plan_reviser,stack.jeffreysprompts,stack.process_triage,stack.ultimate_bug_scanner,stack.beads_rust,stack.beads_viewer,stack.cass,stack.cm,stack.caam,stack.slb,stack.dcg,stack.ru,stack.brenner_bot,stack.rch,stack.srps,stack.frankensearch,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.eidetic_engine_cli,stack.franken_markdown,stack.pi_agent_rust" \
+        || "${ACFS_W3_COMMISSIONING_PLAN_CSV:-}" != "base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,tools.ast_grep,agents.claude,stack.ntm,stack.meta_skill,stack.automated_plan_reviser,stack.jeffreysprompts,stack.process_triage,stack.ultimate_bug_scanner,stack.beads_rust,stack.beads_viewer,stack.cass,stack.cm,stack.caam,stack.slb,stack.dcg,stack.ru,stack.brenner_bot,stack.rch,stack.srps,stack.frankensearch,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.eidetic_engine_cli,stack.franken_markdown,stack.pi_agent_rust" \
         || "${ACFS_R1_SEED_CSV:-}" != "users.ubuntu,base.filesystem,cli.modern,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer" \
         || "${ACFS_R1_PLAN_CSV:-}" != "base.system,users.ubuntu,base.filesystem,cli.modern,lang.bun,lang.uv,lang.rust,lang.go,stack.mcp_agent_mail,stack.beads_rust,stack.beads_viewer" \
         || "${ACFS_R1_HELD_CSV:-}" != "stack.caam,stack.slb,stack.srps,stack.storage_ballast_helper,stack.cross_agent_session_resumer,stack.doodlestein_self_releaser,stack.agent_settings_backup,stack.pcr,stack.franken_markdown,stack.power_failure_resumer" ]]; then
@@ -525,6 +612,9 @@ acfs_r1_runtime_verify_profile() {
     if acfs_w2_partial_safe_requested; then
         _acfs_r1_verify_bound_file "$runtime_root" "scripts/generated/install_w2_partial_safe.sh" "$ACFS_W2_GENERATED_PARTIAL_SAFE_SHA256" || return 1
     fi
+    if acfs_license_clearance_requested; then
+        _acfs_r1_verify_bound_file "$runtime_root" "config/flywheel-license-clearance.json" "$ACFS_LICENSE_CLEARANCE_SHA256" || return 1
+    fi
     return 0
 }
 
@@ -532,7 +622,13 @@ acfs_r1_runtime_module_is_held() {
     local module_id="${1:-}"
     [[ -n "$module_id" ]] || return 1
     case ",$ACFS_R1_HELD_CSV," in
-        *",$module_id,"*) return 0 ;;
+        *",$module_id,"*)
+            if acfs_license_policy_module_is_held "$module_id" \
+                && acfs_license_clearance_active; then
+                return 1
+            fi
+            return 0
+            ;;
         *) return 1 ;;
     esac
 }
@@ -541,7 +637,10 @@ acfs_r1_runtime_module_is_planned() {
     local module_id="${1:-}"
     local plan_csv="$ACFS_R1_PLAN_CSV"
     [[ -n "$module_id" ]] || return 1
-    if acfs_w2_partial_safe_requested; then
+    if acfs_license_clearance_requested; then
+        acfs_license_clearance_verify || return 1
+        plan_csv="$ACFS_W3_COMMISSIONING_PLAN_CSV"
+    elif acfs_w2_partial_safe_requested; then
         acfs_w2_partial_safe_verify_allowlist || return 1
         plan_csv="$ACFS_W2_PARTIAL_SAFE_PLAN_CSV"
     fi
@@ -594,13 +693,20 @@ acfs_r1_runtime_admit_entry() {
             # bootstrap exception requires the exact immutable allowlist and
             # ends as soon as the plan is validated.  Module entrypoints never
             # receive this exception.
-            if acfs_w2_partial_safe_requested \
+            if { acfs_w2_partial_safe_requested || acfs_license_clearance_requested; } \
                 && [[ -z "$module_id" ]] \
                 && [[ "${ACFS_R1_PLAN_VALIDATED:-false}" != "true" ]]; then
-                acfs_w2_partial_safe_verify_allowlist || {
-                    ACFS_R1_POLICY_REASON="${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-W2 PARTIAL_SAFE allowlist verification failed}"
-                    return 1
-                }
+                if acfs_license_clearance_requested; then
+                    acfs_license_clearance_verify || {
+                        ACFS_R1_POLICY_REASON="${ACFS_LICENSE_CLEARANCE_POLICY_REASON:-license clearance receipt verification failed}"
+                        return 1
+                    }
+                else
+                    acfs_w2_partial_safe_verify_allowlist || {
+                        ACFS_R1_POLICY_REASON="${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-W2 PARTIAL_SAFE allowlist verification failed}"
+                        return 1
+                    }
+                fi
             elif ! acfs_r1_runtime_validate_plan; then
                 if [[ -z "${ACFS_R1_POLICY_REASON:-}" ]]; then
                     ACFS_R1_POLICY_REASON="R1 rejects $entry dispatch without an exact validated eleven-module plan"
@@ -691,7 +797,13 @@ acfs_r1_runtime_prepare_selection() {
 
     requested_csv="$(_acfs_r1_array_csv "${ONLY_MODULES[@]}")"
     local expected_seed_csv="$ACFS_R1_SEED_CSV"
-    if acfs_w2_partial_safe_requested; then
+    if acfs_license_clearance_requested; then
+        if ! acfs_license_clearance_verify; then
+            ACFS_R1_POLICY_REASON="${ACFS_LICENSE_CLEARANCE_POLICY_REASON:-license clearance receipt verification failed}"
+            return 1
+        fi
+        expected_seed_csv="$ACFS_W3_COMMISSIONING_SEED_CSV"
+    elif acfs_w2_partial_safe_requested; then
         if ! acfs_w2_partial_safe_verify_allowlist; then
             ACFS_R1_POLICY_REASON="${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-W2 PARTIAL_SAFE allowlist verification failed}"
             return 1
@@ -744,7 +856,13 @@ acfs_r1_runtime_validate_plan() {
         return 1
     fi
 
-    if acfs_w2_partial_safe_requested; then
+    if acfs_license_clearance_requested; then
+        if ! acfs_license_clearance_verify; then
+            ACFS_R1_POLICY_REASON="${ACFS_LICENSE_CLEARANCE_POLICY_REASON:-license clearance receipt verification failed}"
+            return 1
+        fi
+        expected_plan_csv="$ACFS_W3_COMMISSIONING_PLAN_CSV"
+    elif acfs_w2_partial_safe_requested; then
         if ! acfs_w2_partial_safe_verify_allowlist; then
             ACFS_R1_POLICY_REASON="${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-W2 PARTIAL_SAFE allowlist verification failed}"
             return 1
@@ -768,7 +886,12 @@ acfs_r1_runtime_validate_plan() {
         base.system users.ubuntu base.filesystem cli.modern
         lang.bun lang.uv lang.rust lang.go
     )
-    if ! acfs_w2_partial_safe_requested; then
+    if acfs_license_clearance_requested; then
+        # The exact manifest digest and complete ordered plan above bind every
+        # W3 phase/dependency edge. Keep the hand-audited base invariants here;
+        # do not duplicate 26 manifest dependency rows in mutable shell code.
+        :
+    elif ! acfs_w2_partial_safe_requested; then
         expected_modules+=(stack.mcp_agent_mail stack.beads_rust stack.beads_viewer)
     fi
     for module_id in "${expected_modules[@]}"; do

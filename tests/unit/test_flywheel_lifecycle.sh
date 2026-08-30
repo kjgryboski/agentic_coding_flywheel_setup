@@ -149,7 +149,7 @@ assert value["schema"] == "agent-flywheel.installation/v1"
 assert value["source"]["head"] == head
 assert value["source"]["tree"] == tree
 assert len(value["bundle"]["sha256"]) == 64
-assert value["modules"] == {"approved": 8, "licensing_held": 27}
+assert value["modules"] == {"approved": 8, "licensing_cleared": 0, "licensing_pending": 27}
 PY
 
 status_rc=0
@@ -166,7 +166,7 @@ assert value["vm"] == {"healthy":False,"name":"agent-flywheel-ubuntu2404","statu
 assert value["source"]["clean"] is True
 assert value["source"]["matches_installation"] is True
 assert value["installation"]["status"] == "recorded"
-assert value["installation"]["matches_current_allowlist"] is True
+assert value["installation"]["matches_current_authority"] is True
 assert value["modules"]["approved_count"] == 8
 assert value["modules"]["pending_licensing_approvals"] == 27
 assert value["repository_rollout"] == {"status":"not_connected"}

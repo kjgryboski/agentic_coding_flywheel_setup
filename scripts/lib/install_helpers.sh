@@ -22,6 +22,9 @@ _acfs_install_helpers_rebind_canonical_contract() {
         acfs_license_policy_module_is_held \
         acfs_license_policy_module_is_plain_mit_only \
         acfs_license_policy_admit_entry \
+        acfs_license_clearance_requested \
+        acfs_license_clearance_verify \
+        acfs_license_clearance_active \
         acfs_r1_runtime_profile_payload \
         _acfs_r1_sha256_file \
         _acfs_r1_profile_actual_sha256 \

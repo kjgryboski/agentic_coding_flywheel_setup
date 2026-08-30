@@ -5,9 +5,11 @@ umask 022
 
 SOURCE_ROOT="${FLYWHEEL_SOURCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 ALLOWLIST="${ACFS_PARTIAL_SAFE_ALLOWLIST_FILE:-$SOURCE_ROOT/config/flywheel-partial-safe-allowlist.json}"
+CLEARANCE="${ACFS_LICENSE_CLEARANCE_FILE:-}"
 TARGET_USER="${TARGET_USER:-ubuntu}"
 TARGET_HOME="${TARGET_HOME:-/home/$TARGET_USER}"
 FORMAT="text"
+LICENSE_CLEARED=false
 
 usage() {
     printf 'Usage: %s [--json]\n' "${0##*/}"
@@ -29,7 +31,14 @@ fi
 
 # shellcheck source=lib/contract.sh
 source "$SOURCE_ROOT/scripts/lib/contract.sh"
-export ACFS_PARTIAL_SAFE_ALLOWLIST_FILE="$ALLOWLIST" TARGET_USER TARGET_HOME
+if [[ -n "$CLEARANCE" ]]; then
+    LICENSE_CLEARED=true
+    unset ACFS_PARTIAL_SAFE_ALLOWLIST_FILE
+    export ACFS_LICENSE_CLEARANCE_FILE="$CLEARANCE"
+else
+    export ACFS_PARTIAL_SAFE_ALLOWLIST_FILE="$ALLOWLIST"
+fi
+export TARGET_USER TARGET_HOME
 
 checks=()
 failures=0
@@ -41,7 +50,11 @@ record() {
     [[ "$status" == "pass" ]] || failures=$((failures + 1))
 }
 
-if acfs_w2_partial_safe_verify_allowlist; then
+if [[ "$LICENSE_CLEARED" == "true" ]] && acfs_license_clearance_verify; then
+    record license_clearance pass "$(sha256sum "$CLEARANCE" | awk '{print $1}')"
+elif [[ "$LICENSE_CLEARED" == "true" ]]; then
+    record license_clearance fail "${ACFS_LICENSE_CLEARANCE_POLICY_REASON:-clearance rejected}"
+elif acfs_w2_partial_safe_verify_allowlist; then
     record allowlist pass "$(sha256sum "$ALLOWLIST" | awk '{print $1}')"
 else
     record allowlist fail "${ACFS_W2_PARTIAL_SAFE_POLICY_REASON:-allowlist rejected}"
@@ -95,7 +108,7 @@ for module_command in "lang.bun:bun" "lang.uv:uv" "lang.rust:rustc" "lang.rust:c
     fi
 done
 
-held=(
+licensed=(
     stack.beads_rust stack.agent_settings_backup stack.caam stack.cross_agent_session_resumer
     stack.pcr stack.automated_plan_reviser stack.brenner_bot stack.eidetic_engine_cli
     stack.frankensearch stack.jeffreysprompts stack.meta_skill stack.pi_agent_rust
@@ -105,15 +118,67 @@ held=(
     stack.cass stack.cm stack.ntm
 )
 unexpected=()
-for module_id in "${held[@]}"; do
-    if acfs_r1_runtime_admit_entry direct "$module_id" >/dev/null 2>&1; then
-        unexpected+=("$module_id")
+if [[ "$LICENSE_CLEARED" == "true" ]]; then
+    for module_id in "${licensed[@]}"; do
+        if ! acfs_license_policy_admit_entry direct "$module_id" >/dev/null 2>&1; then
+            unexpected+=("$module_id")
+        fi
+    done
+    if ((${#unexpected[@]} == 0)); then
+        record license_scope pass "27/27 exact revisions cleared at the license gate"
+    else
+        record license_scope fail "license gate rejected: ${unexpected[*]}"
     fi
-done
-if ((${#unexpected[@]} == 0)); then
-    record held_exclusions pass "27/27 rejected before lifecycle activity"
 else
-    record held_exclusions fail "unexpectedly admitted: ${unexpected[*]}"
+    for module_id in "${licensed[@]}"; do
+        if acfs_r1_runtime_admit_entry direct "$module_id" >/dev/null 2>&1; then
+            unexpected+=("$module_id")
+        fi
+    done
+    if ((${#unexpected[@]} == 0)); then
+        record held_exclusions pass "27/27 rejected before lifecycle activity"
+    else
+        record held_exclusions fail "unexpectedly admitted: ${unexpected[*]}"
+    fi
+fi
+
+if [[ "$LICENSE_CLEARED" == "true" ]]; then
+    missing=()
+    for module_command in \
+        "tools.ast_grep:sg" "agents.claude:claude" \
+        "stack.ntm:ntm" "stack.meta_skill:ms" "stack.automated_plan_reviser:apr" \
+        "stack.jeffreysprompts:jfp" "stack.process_triage:pt" \
+        "stack.ultimate_bug_scanner:ubs" "stack.beads_rust:br" \
+        "stack.beads_viewer:bv" "stack.cass:cass" "stack.cm:cm" \
+        "stack.caam:caam" "stack.slb:slb" "stack.dcg:dcg" "stack.ru:ru" \
+        "stack.brenner_bot:brenner" "stack.rch:rch" "stack.srps:sysmoni" \
+        "stack.frankensearch:fsfs" "stack.storage_ballast_helper:sbh" \
+        "stack.cross_agent_session_resumer:casr" \
+        "stack.doodlestein_self_releaser:dsr" "stack.agent_settings_backup:asb" \
+        "stack.pcr:claude-post-compact-reminder" "stack.eidetic_engine_cli:ee" \
+        "stack.franken_markdown:fmd" "stack.pi_agent_rust:pi"; do
+        module_id="${module_command%%:*}"
+        command_name="${module_command#*:}"
+        command -v "$command_name" >/dev/null 2>&1 || missing+=("$module_id:$command_name")
+    done
+    if ((${#missing[@]} == 0)); then
+        record expanded_modules pass "28/28 dependency and licensed module commands available"
+    else
+        record expanded_modules fail "missing: ${missing[*]}"
+    fi
+
+    if systemctl is-active ananicy-cpp >/dev/null 2>&1; then
+        record stack.srps/service pass "ananicy-cpp active"
+    else
+        record stack.srps/service fail "ananicy-cpp inactive"
+    fi
+
+    if ! acfs_r1_runtime_admit_entry direct stack.mcp_agent_mail >/dev/null 2>&1 \
+        && ! acfs_r1_runtime_admit_entry direct stack.power_failure_resumer >/dev/null 2>&1; then
+        record independent_holds pass "Agent Mail C5 and PFR qualification holds preserved"
+    else
+        record independent_holds fail "an independent commissioning hold was lost"
+    fi
 fi
 
 state_file="$TARGET_HOME/.acfs/state.json"
@@ -131,6 +196,7 @@ fi
 if [[ "$FORMAT" == "json" ]]; then
     printf '%s\n' "${checks[@]}" | python3 -c '
 import json, sys
+license_cleared=sys.argv[1] == "true"
 rows=[]
 for line in sys.stdin:
     line=line.rstrip("\n")
@@ -140,14 +206,14 @@ for line in sys.stdin:
     rows.append({"id":identifier,"status":status,"detail":detail})
 failures=sum(row["status"] != "pass" for row in rows)
 print(json.dumps({
-    "schema":"agent-flywheel.partial-safe-doctor/v1",
-    "claim":"PARTIAL_SAFE",
+    "schema":"agent-flywheel.license-cleared-doctor/v1" if license_cleared else "agent-flywheel.partial-safe-doctor/v1",
+    "claim":"LICENSE_CLEARED_PARTIAL" if license_cleared else "PARTIAL_SAFE",
     "fully_commissioned":False,
     "status":"pass" if failures == 0 else "fail",
     "checks":rows,
     "summary":{"pass":len(rows)-failures,"warn":0,"fail":failures},
 },sort_keys=True,separators=(",",":")))
-'
+' "$LICENSE_CLEARED"
 else
     for item in "${checks[@]}"; do
         IFS=$'\t' read -r id status detail <<<"$item"
