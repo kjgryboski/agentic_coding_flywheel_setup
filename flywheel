@@ -18,6 +18,8 @@ VM_TEMPLATE_RELATIVE="config/flywheel-lima.yaml"
 HEAVY_RUN="${FLYWHEEL_HEAVY_RUN:-$HOME/.local/bin/codex-heavy-run}"
 if [[ -n "${FLYWHEEL_LIMACTL:-}" ]]; then
     LIMACTL="$FLYWHEEL_LIMACTL"
+elif [[ -x "$HOME/.local/bin/limactl" ]]; then
+    LIMACTL="$HOME/.local/bin/limactl"
 elif [[ -x /opt/homebrew/bin/limactl ]]; then
     LIMACTL=/opt/homebrew/bin/limactl
 elif [[ -x /usr/local/bin/limactl ]]; then
