@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -437,7 +438,9 @@ def validate_synthetic_pilot(raw: bytes, value: dict[str, Any]) -> dict[str, Any
     receipt_sha256 = value.get("receipt_sha256")
     digest_source = dict(value)
     digest_source.pop("receipt_sha256")
-    if not is_hex(receipt_sha256, 64) or receipt_sha256 != content_digest(digest_source):
+    if not is_hex(receipt_sha256, 64) or not hmac.compare_digest(
+        receipt_sha256, content_digest(digest_source)
+    ):
         raise ControlError("synthetic pilot canonical receipt digest is invalid")
 
     verdict = value.get("verdict")
@@ -513,8 +516,8 @@ def validate_synthetic_pilot(raw: bytes, value: dict[str, Any]) -> dict[str, Any
 
     artifact_sha256 = hashlib.sha256(raw).hexdigest()
     if (
-        artifact_sha256 != OPS_PILOT_ARTIFACT_SHA256
-        or receipt_sha256 != OPS_PILOT_RECEIPT_SHA256
+        not hmac.compare_digest(artifact_sha256, OPS_PILOT_ARTIFACT_SHA256)
+        or not hmac.compare_digest(receipt_sha256, OPS_PILOT_RECEIPT_SHA256)
         or git_value != {"head": OPS_PILOT_HEAD, "tree": OPS_PILOT_TREE, "clean": True}
         or evidence != OPS_PILOT_EVIDENCE_SHA256
     ):
@@ -558,7 +561,7 @@ def bind_pilot_source(pilot: dict[str, Any], candidate: str) -> dict[str, Any]:
         observed_sha256 = hashlib.sha256(
             stable_read(evidence_path, RECEIPT_MAXIMUM_BYTES, f"Ops evidence {relative_path}")
         ).hexdigest()
-        if observed_sha256 != expected_sha256:
+        if not hmac.compare_digest(observed_sha256, expected_sha256):
             raise ControlError(f"Ops pilot evidence has drifted: {relative_path}")
     final_identity = (
         repository_binding(root),
@@ -605,7 +608,7 @@ def validate_plan_receipt(raw: bytes, value: dict[str, Any]) -> dict[str, Any]:
     cohorts = value.get("cohorts")
     if (
         not is_hex(plan_digest, 64)
-        or plan_digest != content_digest(digest_source)
+        or not hmac.compare_digest(plan_digest, content_digest(digest_source))
         or raw != canonical_bytes(value)
         or not isinstance(cohorts, list)
         or not cohorts
@@ -746,7 +749,7 @@ def validate_eligibility_receipt(raw: bytes, value: dict[str, Any]) -> dict[str,
     eligibility_sha256 = digest_source.pop("eligibility_sha256")
     if (
         not is_hex(eligibility_sha256, 64)
-        or eligibility_sha256 != content_digest(digest_source)
+        or not hmac.compare_digest(eligibility_sha256, content_digest(digest_source))
         or raw != canonical_bytes(value)
     ):
         raise ControlError("repository eligibility content binding is invalid")
@@ -781,7 +784,10 @@ def validate_eligibility_receipt(raw: bytes, value: dict[str, Any]) -> dict[str,
         or not isinstance(source.get("root"), str)
         or not isinstance(source.get("remote_url"), str)
         or source.get("repository") != OPS_REPOSITORY
-        or pilot.get("artifact_sha256") != validated_pilot["artifact_sha256"]
+        or not isinstance(pilot.get("artifact_sha256"), str)
+        or not hmac.compare_digest(
+            pilot["artifact_sha256"], validated_pilot["artifact_sha256"]
+        )
         or not is_hex(source.get("head"), 40)
         or not is_hex(source.get("tree"), 40)
         or source.get("clean") is not True
