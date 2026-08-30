@@ -50,6 +50,15 @@ case "${1:-}" in
         ;;
     stop)
         printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
+        if [[ -n "${FLYWHEEL_TEST_STOP_ENTERED_FILE:-}" ]]; then
+            : >"$FLYWHEEL_TEST_STOP_ENTERED_FILE"
+            attempts=0
+            while [[ ! -e "$FLYWHEEL_TEST_STOP_RELEASE_FILE" ]]; do
+                attempts=$((attempts + 1))
+                ((attempts < 200)) || exit 88
+                sleep 0.05
+            done
+        fi
         printf 'Stopped\n' >"$FLYWHEEL_TEST_STATUS_FILE"
         ;;
     copy)
@@ -84,6 +93,7 @@ export FLYWHEEL_TEST_PROFILE_FILE="$PROFILE_FILE"
 export FLYWHEEL_TEST_QUERY_FILE="$QUERY_FILE"
 
 python3 - "$REPO_ROOT/config/flywheel-partial-safe-allowlist.json" <<'PY'
+import hashlib
 import json
 import sys
 
@@ -181,6 +191,7 @@ cmp -s "$QUALIFICATION_ROOT/flywheel" "$TEST_ROOT/home/.local/bin/flywheel"
 HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" mac install --quiet
 cmp -s "$QUALIFICATION_ROOT/flywheel" "$TEST_ROOT/home/.local/bin/flywheel"
 python3 - "$FLYWHEEL_STATE_HOME/installation.json" "$QUALIFICATION_ROOT" <<'PY'
+import hashlib
 import json
 import subprocess
 import sys
@@ -193,7 +204,15 @@ assert value["schema"] == "agent-flywheel.installation/v1"
 assert value["source"]["head"] == head
 assert value["source"]["tree"] == tree
 assert len(value["bundle"]["sha256"]) == 64
-assert value["modules"] == {"approved": 8, "licensing_cleared": 0, "licensing_pending": 27}
+assert value["authority"]["guest_file"] == "/var/lib/agent-flywheel/doctor-allowlist.json"
+assert value["modules"]["approved"] == 8
+assert len(value["modules"]["approved_ids"]) == 8
+assert value["modules"]["independent_holds"] == []
+assert value["modules"]["licensing_cleared"] == 0
+assert value["modules"]["licensing_pending"] == 27
+digest = value.pop("receipt_sha256")
+canonical = (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+assert digest == hashlib.sha256(canonical).hexdigest()
 PY
 
 printf 'Stopped\n' >"$STATUS_FILE"
@@ -265,6 +284,115 @@ running_text="$("$REPO_ROOT/flywheel" status)"
 [[ "$running_text" == *'Doctor: pass'* ]]
 [[ "$running_text" == *'Repository rollout: not_connected'* ]]
 [[ "$running_text" == *'Blocker [repository_rollout]: receipt_not_connected'* ]]
+
+# Every mutating lifecycle command, including stop, shares one kernel-held
+# lock. Contenders cannot steal it while the current owner is paused in Lima.
+STOP_ENTERED_FILE="$TEST_ROOT/stop-entered"
+STOP_RELEASE_FILE="$TEST_ROOT/stop-release"
+export FLYWHEEL_TEST_STOP_ENTERED_FILE="$STOP_ENTERED_FILE"
+export FLYWHEEL_TEST_STOP_RELEASE_FILE="$STOP_RELEASE_FILE"
+: >"$CALLS"
+printf 'Running\n' >"$STATUS_FILE"
+"$REPO_ROOT/flywheel" stop --quiet >"$TEST_ROOT/stop-holder.out" 2>&1 &
+stop_holder_pid=$!
+attempts=0
+while [[ ! -e "$STOP_ENTERED_FILE" ]]; do
+    attempts=$((attempts + 1))
+    ((attempts < 100)) || {
+        printf 'stop holder did not enter the mocked Lima stop\n' >&2
+        exit 1
+    }
+    sleep 0.05
+done
+kill -0 "$stop_holder_pid" 2>/dev/null
+
+for conflicting_command in stop start; do
+    conflict_rc=0
+    "$REPO_ROOT/flywheel" "$conflicting_command" --quiet \
+        >"$TEST_ROOT/conflict-$conflicting_command.out" 2>&1 || conflict_rc=$?
+    [[ "$conflict_rc" -eq 5 ]]
+done
+install_conflict_rc=0
+HOME="$TEST_ROOT/home" "$REPO_ROOT/flywheel" mac install --quiet \
+    >"$TEST_ROOT/conflict-install.out" 2>&1 || install_conflict_rc=$?
+[[ "$install_conflict_rc" -eq 5 ]]
+if grep -F -- '--stateful --' "$CALLS" >/dev/null; then
+    printf 'conflicting install unexpectedly entered the heavy lifecycle guard\n' >&2
+    exit 1
+fi
+
+contender_pids=()
+index=1
+while ((index <= 8)); do
+    (
+        contender_rc=0
+        "$REPO_ROOT/flywheel" stop --quiet \
+            >"$TEST_ROOT/contender-$index.out" 2>&1 || contender_rc=$?
+        printf '%s\n' "$contender_rc" >"$TEST_ROOT/contender-$index.rc"
+    ) &
+    contender_pids+=("$!")
+    index=$((index + 1))
+done
+for contender_pid in "${contender_pids[@]}"; do
+    wait "$contender_pid"
+done
+index=1
+while ((index <= 8)); do
+    [[ "$(<"$TEST_ROOT/contender-$index.rc")" == "5" ]]
+    index=$((index + 1))
+done
+[[ "$(grep -c '^stop agent-flywheel-ubuntu2404$' "$CALLS")" -eq 1 ]]
+: >"$STOP_RELEASE_FILE"
+wait "$stop_holder_pid"
+[[ "$(<"$STATUS_FILE")" == "Stopped" ]]
+unset FLYWHEEL_TEST_STOP_ENTERED_FILE FLYWHEEL_TEST_STOP_RELEASE_FILE
+
+# PID-shaped stale metadata has no ownership authority. Only the kernel flock
+# matters, so PID reuse cannot cause a false conflict.
+printf '{"owner_pid":%s,"schema":"agent-flywheel.lifecycle-lock/v1"}\n' "$$" \
+    >"$FLYWHEEL_STATE_HOME/locks/lifecycle.lock/owner.lock"
+printf 'Running\n' >"$STATUS_FILE"
+"$REPO_ROOT/flywheel" stop --quiet
+[[ "$(<"$STATUS_FILE")" == "Stopped" ]]
+
+# A live kernel owner blocks stop; an abrupt owner death releases the lock even
+# though its metadata file remains.
+printf 'Running\n' >"$STATUS_FILE"
+python3 - \
+    "$FLYWHEEL_STATE_HOME/locks/lifecycle.lock/owner.lock" \
+    "$TEST_ROOT/external-lock-ready" <<'PY' &
+import fcntl
+import os
+import sys
+import time
+
+descriptor = os.open(sys.argv[1], os.O_RDWR | os.O_NOFOLLOW)
+fcntl.flock(descriptor, fcntl.LOCK_EX)
+os.ftruncate(descriptor, 0)
+os.write(descriptor, b'{"schema":"agent-flywheel.lifecycle-lock/v1","owner_pid":999999}\n')
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    handle.write("ready\n")
+time.sleep(60)
+PY
+external_lock_pid=$!
+attempts=0
+while [[ ! -s "$TEST_ROOT/external-lock-ready" ]]; do
+    attempts=$((attempts + 1))
+    ((attempts < 100)) || {
+        printf 'external lock helper did not become ready\n' >&2
+        exit 1
+    }
+    sleep 0.05
+done
+external_conflict_rc=0
+"$REPO_ROOT/flywheel" stop --quiet \
+    >"$TEST_ROOT/external-conflict.out" 2>&1 || external_conflict_rc=$?
+[[ "$external_conflict_rc" -eq 5 ]]
+kill "$external_lock_pid"
+wait "$external_lock_pid" 2>/dev/null || true
+"$REPO_ROOT/flywheel" stop --quiet
+[[ "$(<"$STATUS_FILE")" == "Stopped" ]]
+printf 'Running\n' >"$STATUS_FILE"
 
 printf '{"schema":"agent-flywheel.repository-rollout/v1","status":"pass","scope":"live-repository-rollout","repository":"synthetic/local","bookclub_eligible":true}\n' \
     >"$TEST_ROOT/rollout.json"
@@ -739,6 +867,17 @@ assert [item["code"] for item in value["blockers"]] == ["receipt_invalid"]
 ' "$tampered_plan_status_json"
 
 printf 'validator trust drift\n' >"$QUALIFICATION_ROOT/validator-trust-drift.txt"
+# Installation remains the one lifecycle command that requires a clean current
+# source. It must refuse before locking, staging, or entering the heavy guard.
+: >"$CALLS"
+dirty_install_rc=0
+HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" mac install --quiet \
+    >"$TEST_ROOT/dirty-install.out" 2>&1 || dirty_install_rc=$?
+[[ "$dirty_install_rc" -eq 2 ]]
+if grep -F -- '--stateful --' "$CALLS" >/dev/null; then
+    printf 'dirty install unexpectedly entered the heavy lifecycle guard\n' >&2
+    exit 1
+fi
 dirty_validator_status="$("$REPO_ROOT/flywheel" status --json \
     --rollout-receipt "$TEST_ROOT/rollout-plan.json")" || true
 python3 -c '
@@ -760,6 +899,127 @@ assert value["source"]["matches_installation"] is False
 assert value["repository_rollout"]["status"] == "invalid"
 assert "requires the clean exact source recorded by the installation receipt" in value["repository_rollout"]["error"]
 ' "$drifted_validator_status"
+
+# An advanced clean checkout, even one whose authority selection differs, is
+# diagnostic only for lifecycle health. Installed work stays bound to the
+# self-contained receipt's exact guest source and authority.
+RECORDED_HEAD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"]["head"])' \
+    "$FLYWHEEL_STATE_HOME/installation.json")"
+RECORDED_GUEST_ROOT="/opt/agent-flywheel-acfs-$RECORDED_HEAD"
+cp "$REPO_ROOT/config/flywheel-license-clearance.json" \
+    "$QUALIFICATION_ROOT/config/flywheel-license-clearance.json"
+git -C "$QUALIFICATION_ROOT" add config/flywheel-license-clearance.json
+git -C "$QUALIFICATION_ROOT" -c user.name=Flywheel -c user.email=flywheel.invalid@example.test \
+    commit -qm advanced-checkout-authority
+: >"$CALLS"
+advanced_status_json="$(HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" status --json)"
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["readiness"] == "ready"
+assert value["installation"]["status"] == "recorded"
+assert value["source"]["clean"] is True
+assert value["source"]["matches_installation"] is False
+assert value["installed_source"]["head"] == sys.argv[2]
+assert value["qualification"]["status"] == "pass"
+assert value["doctor"]["status"] == "pass"
+assert [item["code"] for item in value["blockers"]] == ["receipt_not_connected"]
+' "$advanced_status_json" "$RECORDED_HEAD"
+HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" doctor --json >/dev/null
+grep -F -- "$RECORDED_GUEST_ROOT/scripts/flywheel-qualification-host.sh" "$CALLS" >/dev/null
+grep -F -- 'ACFS_PARTIAL_SAFE_ALLOWLIST_FILE=/var/lib/agent-flywheel/doctor-allowlist.json' "$CALLS" >/dev/null
+if grep -F -- 'ACFS_LICENSE_CLEARANCE_FILE=' "$CALLS" >/dev/null; then
+    printf 'advanced checkout authority incorrectly replaced the installed authority\n' >&2
+    exit 1
+fi
+
+# Moving or removing the original checkout cannot strand status or doctor.
+# The installed launcher continues from the exact validated receipt snapshot.
+MOVED_QUALIFICATION_ROOT="$TEST_ROOT/qualification-source-moved"
+RETAINED_DELETED_ROOT="$TEST_ROOT/qualification-source-retained"
+mv "$QUALIFICATION_ROOT" "$MOVED_QUALIFICATION_ROOT"
+printf '%s\n' "$MOVED_QUALIFICATION_ROOT" >"$FLYWHEEL_STATE_HOME/source-root"
+unset FLYWHEEL_SOURCE_REPO
+moved_status_json="$(HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" status --json)"
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["readiness"] == "ready"
+assert value["source"]["root"].endswith("qualification-source-moved")
+assert value["source"]["matches_installation"] is False
+assert value["installed_source"]["head"] == sys.argv[2]
+assert [item["code"] for item in value["blockers"]] == ["receipt_not_connected"]
+' "$moved_status_json" "$RECORDED_HEAD"
+HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" doctor --json >/dev/null
+
+mv "$MOVED_QUALIFICATION_ROOT" "$RETAINED_DELETED_ROOT"
+deleted_status_json="$(HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" status --json)"
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["readiness"] == "ready"
+assert value["source"] == {"clean":None,"head":None,"matches_installation":None,"root":None,"tree":None}
+assert value["installed_source"]["head"] == sys.argv[2]
+assert value["qualification"]["status"] == "pass"
+assert value["doctor"]["status"] == "pass"
+assert [item["code"] for item in value["blockers"]] == ["receipt_not_connected"]
+' "$deleted_status_json" "$RECORDED_HEAD"
+HOME="$TEST_ROOT/home" "$TEST_ROOT/home/.local/bin/flywheel" doctor --json >/dev/null
+
+mv "$RETAINED_DELETED_ROOT" "$QUALIFICATION_ROOT"
+printf '%s\n' "$QUALIFICATION_ROOT" >"$FLYWHEEL_STATE_HOME/source-root"
+export FLYWHEEL_SOURCE_REPO="$QUALIFICATION_ROOT"
+
+# State reads are nofollow, nonblocking, and bounded. Unsafe receipts fail
+# closed and cannot select a guest source or authority.
+VALID_INSTALL_RECEIPT="$TEST_ROOT/installation-valid.json"
+mv "$FLYWHEEL_STATE_HOME/installation.json" "$VALID_INSTALL_RECEIPT"
+ln -s "$TEST_ROOT/symlink-target" "$FLYWHEEL_STATE_HOME/installation.json"
+: >"$CALLS"
+unsafe_status_rc=0
+unsafe_status_json="$("$REPO_ROOT/flywheel" status --json)" || unsafe_status_rc=$?
+[[ "$unsafe_status_rc" -eq 1 ]]
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+assert value["installation"]["status"] == "receipt_invalid"
+assert any(item["code"] == "installation_receipt_invalid" for item in value["blockers"])
+assert value["qualification"]["status"] == "not_run"
+assert value["doctor"]["status"] == "not_run"
+' "$unsafe_status_json"
+unsafe_doctor_rc=0
+"$REPO_ROOT/flywheel" doctor --json >"$TEST_ROOT/unsafe-doctor.out" 2>&1 || unsafe_doctor_rc=$?
+[[ "$unsafe_doctor_rc" -eq 2 ]]
+if grep -F -- 'flywheel-partial-safe-doctor.sh' "$CALLS" >/dev/null; then
+    printf 'unsafe receipt unexpectedly selected a guest doctor\n' >&2
+    exit 1
+fi
+mv "$FLYWHEEL_STATE_HOME/installation.json" "$TEST_ROOT/installation-symlink"
+mv "$VALID_INSTALL_RECEIPT" "$FLYWHEEL_STATE_HOME/installation.json"
+
+mv "$FLYWHEEL_STATE_HOME/installation.json" "$VALID_INSTALL_RECEIPT"
+python3 - "$FLYWHEEL_STATE_HOME/installation.json" <<'PY'
+import sys
+with open(sys.argv[1], "wb") as handle:
+    handle.write(b"x" * (64 * 1024 + 1))
+PY
+oversized_status_rc=0
+oversized_status_json="$("$REPO_ROOT/flywheel" status --json)" || oversized_status_rc=$?
+[[ "$oversized_status_rc" -eq 1 ]]
+python3 -c 'import json,sys; assert json.loads(sys.argv[1])["installation"]["status"] == "receipt_invalid"' \
+    "$oversized_status_json"
+mv "$FLYWHEEL_STATE_HOME/installation.json" "$TEST_ROOT/installation-oversized"
+mv "$VALID_INSTALL_RECEIPT" "$FLYWHEEL_STATE_HOME/installation.json"
+
+mv "$FLYWHEEL_STATE_HOME/installation.json" "$VALID_INSTALL_RECEIPT"
+mkfifo "$FLYWHEEL_STATE_HOME/installation.json"
+fifo_status_rc=0
+fifo_status_json="$("$REPO_ROOT/flywheel" status --json)" || fifo_status_rc=$?
+[[ "$fifo_status_rc" -eq 1 ]]
+python3 -c 'import json,sys; assert json.loads(sys.argv[1])["installation"]["status"] == "receipt_invalid"' \
+    "$fifo_status_json"
+mv "$FLYWHEEL_STATE_HOME/installation.json" "$TEST_ROOT/installation-fifo"
+mv "$VALID_INSTALL_RECEIPT" "$FLYWHEEL_STATE_HOME/installation.json"
 
 typo_rc=0
 typo_error="$("$REPO_ROOT/flywheel" statsu 2>&1)" || typo_rc=$?

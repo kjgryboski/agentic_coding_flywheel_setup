@@ -21,10 +21,17 @@ JSON=0
 NO_GUM=0
 TEMP_ROOT=""
 LOCK_DIR=""
+LOCK_HELPER_PID=""
+LOCK_CONTROL_OPEN=0
 
 cleanup() {
-    if [[ -n "$LOCK_DIR" && -d "$LOCK_DIR" ]]; then
-        rmdir "$LOCK_DIR" 2>/dev/null || true
+    if ((LOCK_CONTROL_OPEN == 1)); then
+        exec 9>&- 2>/dev/null || true
+        LOCK_CONTROL_OPEN=0
+    fi
+    if [[ -n "$LOCK_HELPER_PID" ]]; then
+        wait "$LOCK_HELPER_PID" 2>/dev/null || true
+        LOCK_HELPER_PID=""
     fi
     if [[ -n "$TEMP_ROOT" && -d "$TEMP_ROOT" ]]; then
         rm -rf -- "$TEMP_ROOT"
@@ -95,14 +102,56 @@ die() {
     exit "$code"
 }
 
+ensure_temp_root() {
+    if [[ -z "$TEMP_ROOT" ]]; then
+        TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flywheel.XXXXXXXX")"
+        chmod 0700 "$TEMP_ROOT"
+    fi
+}
+
+read_source_pointer() {
+    python3 - "$SOURCE_POINTER" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+if not hasattr(os, "O_NOFOLLOW"):
+    raise SystemExit(1)
+flags |= os.O_NOFOLLOW
+try:
+    descriptor = os.open(path, flags)
+except OSError:
+    raise SystemExit(1)
+try:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_size > 4096:
+        raise SystemExit(1)
+    raw = os.read(descriptor, 4097)
+    if len(raw) != metadata.st_size or len(raw) > 4096 or os.read(descriptor, 1):
+        raise SystemExit(1)
+finally:
+    os.close(descriptor)
+try:
+    value = raw.decode("utf-8")
+except UnicodeDecodeError:
+    raise SystemExit(1)
+lines = value.splitlines()
+if len(lines) != 1 or not lines[0].startswith("/") or "\x00" in lines[0]:
+    raise SystemExit(1)
+print(lines[0])
+PY
+}
+
 find_source_root() {
     local self_dir="${SELF%/*}"
     local candidate="${FLYWHEEL_SOURCE_REPO:-}"
     if [[ -z "$candidate" && -f "$self_dir/acfs.manifest.yaml" ]]; then
         candidate="$self_dir"
     fi
-    if [[ -z "$candidate" && -f "$SOURCE_POINTER" && ! -L "$SOURCE_POINTER" ]]; then
-        IFS= read -r candidate <"$SOURCE_POINTER"
+    if [[ -z "$candidate" ]]; then
+        candidate="$(read_source_pointer 2>/dev/null || true)"
     fi
     [[ -n "$candidate" && "$candidate" == /* && -f "$candidate/acfs.manifest.yaml" ]] \
         || return 1
@@ -345,12 +394,136 @@ ensure_running() {
 acquire_lifecycle_lock() {
     local operation="$1"
     local lock_root="$STATE_HOME/locks"
-    mkdir -p "$lock_root"
+    local control_fifo=""
+    local result_file=""
+    local helper_program=""
+    local result=""
+    local attempts=0
+
+    if [[ -e "$STATE_HOME" || -L "$STATE_HOME" ]]; then
+        [[ -d "$STATE_HOME" && ! -L "$STATE_HOME" ]] \
+            || die 3 "lifecycle state directory is unavailable or unsafe"
+    else
+        mkdir -p "$STATE_HOME"
+    fi
+    if [[ -e "$lock_root" || -L "$lock_root" ]]; then
+        [[ -d "$lock_root" && ! -L "$lock_root" ]] \
+            || die 3 "lifecycle lock directory is unavailable or unsafe"
+    else
+        mkdir "$lock_root"
+    fi
     chmod 0700 "$STATE_HOME" "$lock_root"
     LOCK_DIR="$lock_root/lifecycle.lock"
     if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        [[ -d "$LOCK_DIR" && ! -L "$LOCK_DIR" ]] \
+            || die 3 "lifecycle lock container is unavailable or unsafe"
+    fi
+    chmod 0700 "$LOCK_DIR"
+
+    ensure_temp_root
+    control_fifo="$TEMP_ROOT/lifecycle-control"
+    result_file="$TEMP_ROOT/lifecycle-lock-result"
+    helper_program="$TEMP_ROOT/lifecycle-lock-helper.py"
+    mkfifo -m 0600 "$control_fifo"
+    cat >"$helper_program" <<'PY'
+import datetime
+import errno
+import fcntl
+import json
+import os
+import stat
+import sys
+
+lock_path, result_path, operation, owner_pid = sys.argv[1:]
+
+def publish(value):
+    candidate = result_path + ".candidate"
+    descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(descriptor, (value + "\n").encode("utf-8"))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(candidate, result_path)
+
+descriptor = None
+try:
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("O_NOFOLLOW is unavailable")
+    flags = os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(lock_path, flags, 0o600)
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_nlink != 1
+        or metadata.st_mode & 0o077
+    ):
+        raise RuntimeError("lock owner file is not a private regular file")
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        if error.errno in (errno.EACCES, errno.EAGAIN):
+            publish("CONFLICT")
+            raise SystemExit(0)
+        raise
+    owner = {
+        "acquired_at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat(),
+        "helper_pid": os.getpid(),
+        "operation": operation,
+        "owner_pid": int(owner_pid),
+        "schema": "agent-flywheel.lifecycle-lock/v1",
+    }
+    encoded = (json.dumps(owner, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(encoded) > 4096:
+        raise RuntimeError("lock metadata exceeds its bound")
+    os.ftruncate(descriptor, 0)
+    os.write(descriptor, encoded)
+    os.fsync(descriptor)
+    publish("ACQUIRED")
+    while sys.stdin.buffer.read(65536):
+        pass
+except SystemExit:
+    raise
+except Exception as error:
+    try:
+        publish("ERROR:" + type(error).__name__)
+    except Exception:
+        pass
+    raise SystemExit(1)
+finally:
+    if descriptor is not None:
+        os.close(descriptor)
+PY
+    chmod 0600 "$helper_program"
+    python3 "$helper_program" "$LOCK_DIR/owner.lock" "$result_file" "$operation" "$$" \
+        <"$control_fifo" &
+    LOCK_HELPER_PID=$!
+    exec 9>"$control_fifo"
+    LOCK_CONTROL_OPEN=1
+
+    while [[ ! -s "$result_file" ]] && kill -0 "$LOCK_HELPER_PID" 2>/dev/null; do
+        attempts=$((attempts + 1))
+        if ((attempts >= 100)); then
+            break
+        fi
+        sleep 0.05
+    done
+    if [[ -s "$result_file" ]]; then
+        IFS= read -r result <"$result_file"
+    fi
+    if [[ "$result" == "ACQUIRED" ]]; then
+        return 0
+    fi
+
+    exec 9>&- 2>/dev/null || true
+    LOCK_CONTROL_OPEN=0
+    wait "$LOCK_HELPER_PID" 2>/dev/null || true
+    LOCK_HELPER_PID=""
+    if [[ "$result" == "CONFLICT" ]]; then
         die 5 "another Flywheel lifecycle operation is running; retry flywheel $operation after it finishes"
     fi
+    die 3 "the lifecycle lock could not be acquired safely"
 }
 
 sha256_file() {
@@ -423,31 +596,187 @@ license_cleared = authority.get("schema") == "agent-flywheel.license-clearance/v
 if license_cleared:
     commissioning = authority["commissioning"]
     claim = commissioning["claim"]
-    approved = len(commissioning["resolved_modules"])
+    approved_ids = commissioning["resolved_modules"]
+    independent_holds = commissioning["independent_holds"]
     cleared = authority["license_gate"]["cleared_count"]
     pending = authority["license_gate"]["pending_count"]
     authority_kind = "license_clearance"
+    authority_guest_file = "/var/lib/agent-flywheel/doctor-license-clearance.json"
 else:
     claim = "PARTIAL_SAFE"
-    approved = len(authority["allowed_resolved_modules"])
+    approved_ids = authority["allowed_resolved_modules"]
+    independent_holds = []
     cleared = 0
     pending = authority["held_exclusions"]["count"]
     authority_kind = "partial_safe_allowlist"
-print(json.dumps({
+    authority_guest_file = "/var/lib/agent-flywheel/doctor-allowlist.json"
+receipt = {
     "schema": "agent-flywheel.installation/v1",
     "claim": claim,
     "installed_at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat(),
     "source": {"head": head, "tree": tree, "guest_root": guest_root},
     "bundle": {"sha256": bundle_sha256},
-    "authority": {"kind": authority_kind, "sha256": authority_sha256},
+    "authority": {
+        "guest_file": authority_guest_file,
+        "kind": authority_kind,
+        "sha256": authority_sha256,
+    },
     "modules": {
-        "approved": approved,
+        "approved": len(approved_ids),
+        "approved_ids": approved_ids,
+        "independent_holds": independent_holds,
         "licensing_cleared": cleared,
         "licensing_pending": pending,
     },
-}, sort_keys=True, separators=(",", ":")))
+}
+canonical = (json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+receipt["receipt_sha256"] = __import__("hashlib").sha256(canonical).hexdigest()
+print(json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
 PY
     publish_private_file "$candidate" "$INSTALL_RECEIPT"
+}
+
+installation_receipt_context() {
+    python3 - "$INSTALL_RECEIPT" <<'PY'
+import hashlib
+import hmac
+import json
+import os
+import re
+import stat
+import sys
+
+path = sys.argv[1]
+maximum_bytes = 64 * 1024
+
+def result(status, error=None):
+    value = {"schema": "agent-flywheel.installation/v1", "status": status}
+    if error:
+        value["error"] = error
+    print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+if not hasattr(os, "O_NOFOLLOW"):
+    result("receipt_invalid", "nofollow_unavailable")
+    raise SystemExit(0)
+flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+try:
+    descriptor = os.open(path, flags)
+except FileNotFoundError:
+    result("receipt_missing")
+    raise SystemExit(0)
+except OSError:
+    result("receipt_invalid", "unsafe_or_unreadable")
+    raise SystemExit(0)
+
+try:
+    before = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.getuid()
+        or before.st_nlink != 1
+        or before.st_size > maximum_bytes
+    ):
+        raise ValueError("unsafe_metadata")
+    raw = os.read(descriptor, maximum_bytes + 1)
+    if len(raw) != before.st_size or len(raw) > maximum_bytes or os.read(descriptor, 1):
+        raise ValueError("unstable_size")
+    after = os.fstat(descriptor)
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+    ):
+        raise ValueError("changed_during_read")
+except (OSError, ValueError):
+    result("receipt_invalid", "unsafe_or_unstable")
+    raise SystemExit(0)
+finally:
+    os.close(descriptor)
+
+try:
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("root_not_object")
+    if set(value) != {
+        "authority", "bundle", "claim", "installed_at", "modules",
+        "receipt_sha256", "schema", "source",
+    }:
+        raise ValueError("unexpected_fields")
+    receipt_digest = value.get("receipt_sha256")
+    digest_source = dict(value)
+    digest_source.pop("receipt_sha256", None)
+    canonical = (
+        json.dumps(digest_source, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
+    ).encode()
+    observed_digest = hashlib.sha256(canonical).hexdigest()
+    if not isinstance(receipt_digest, str) or not hmac.compare_digest(receipt_digest, observed_digest):
+        raise ValueError("digest_mismatch")
+
+    source = value.get("source")
+    bundle = value.get("bundle")
+    authority = value.get("authority")
+    modules = value.get("modules")
+    if not all(isinstance(item, dict) for item in (source, bundle, authority, modules)):
+        raise ValueError("section_not_object")
+    if set(source) != {"guest_root", "head", "tree"} or set(bundle) != {"sha256"}:
+        raise ValueError("source_or_bundle_fields")
+    if set(authority) != {"guest_file", "kind", "sha256"}:
+        raise ValueError("authority_fields")
+    if set(modules) != {
+        "approved", "approved_ids", "independent_holds", "licensing_cleared", "licensing_pending"
+    }:
+        raise ValueError("module_fields")
+
+    is_hex = lambda item, size: isinstance(item, str) and re.fullmatch(f"[0-9a-f]{{{size}}}", item) is not None
+    if not is_hex(source.get("head"), 40) or not is_hex(source.get("tree"), 40):
+        raise ValueError("source_identity")
+    if source.get("guest_root") != "/opt/agent-flywheel-acfs-" + source["head"]:
+        raise ValueError("guest_root_binding")
+    if not is_hex(bundle.get("sha256"), 64) or not is_hex(authority.get("sha256"), 64):
+        raise ValueError("digest_format")
+
+    authority_contracts = {
+        "license_clearance": (
+            "LICENSE_CLEARED_PARTIAL",
+            "/var/lib/agent-flywheel/doctor-license-clearance.json",
+        ),
+        "partial_safe_allowlist": (
+            "PARTIAL_SAFE",
+            "/var/lib/agent-flywheel/doctor-allowlist.json",
+        ),
+    }
+    expected = authority_contracts.get(authority.get("kind"))
+    if expected is None or value.get("claim") != expected[0] or authority.get("guest_file") != expected[1]:
+        raise ValueError("authority_binding")
+    if not isinstance(value.get("installed_at"), str) or len(value["installed_at"]) > 64:
+        raise ValueError("installed_at")
+
+    approved_ids = modules.get("approved_ids")
+    independent_holds = modules.get("independent_holds")
+    module_pattern = re.compile(r"[a-z0-9][a-z0-9_.-]{0,127}\Z")
+    if not isinstance(approved_ids, list) or not isinstance(independent_holds, list):
+        raise ValueError("module_lists")
+    if len(approved_ids) > 256 or len(independent_holds) > 64:
+        raise ValueError("module_list_bound")
+    if any(not isinstance(item, str) or module_pattern.fullmatch(item) is None for item in approved_ids + independent_holds):
+        raise ValueError("module_identifier")
+    if len(set(approved_ids)) != len(approved_ids) or len(set(independent_holds)) != len(independent_holds):
+        raise ValueError("duplicate_module")
+    for name in ("approved", "licensing_cleared", "licensing_pending"):
+        count = modules.get(name)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0 or count > 10000:
+            raise ValueError("module_count")
+    if modules["approved"] != len(approved_ids):
+        raise ValueError("approved_count")
+    if authority["kind"] == "partial_safe_allowlist" and (
+        modules["licensing_cleared"] != 0 or independent_holds
+    ):
+        raise ValueError("partial_safe_counts")
+
+    normalized = dict(value)
+    normalized["status"] = "recorded"
+    print(json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+except (UnicodeError, json.JSONDecodeError, ValueError):
+    result("receipt_invalid", "content_validation_failed")
+PY
 }
 
 install_command() {
@@ -474,7 +803,7 @@ install_command() {
     tree="$(git -C "$root" rev-parse 'HEAD^{tree}')"
 
     acquire_lifecycle_lock "mac install"
-    TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flywheel-install.XXXXXXXX")"
+    ensure_temp_root
     ensure_running
     info "Staging exact source $head"
     stage_result="$(stage_source "$root" "$head")"
@@ -513,6 +842,11 @@ status_command() {
     require_mac_tools
     local probe=""
     local status=""
+    local installation_json=""
+    local installation_status=""
+    local installed_guest_root=""
+    local installed_authority_kind=""
+    local installed_authority_sha256=""
     local root=""
     local head=""
     local tree=""
@@ -524,6 +858,13 @@ status_command() {
     local status_json=""
     probe="$(vm_probe)"
     status="$(probe_value "$probe" '["status"]')"
+    installation_json="$(installation_receipt_context)"
+    installation_status="$(probe_value "$installation_json" '["status"]')"
+    if [[ "$installation_status" == "recorded" ]]; then
+        installed_guest_root="$(probe_value "$installation_json" '["source"]["guest_root"]')"
+        installed_authority_kind="$(probe_value "$installation_json" '["authority"]["kind"]')"
+        installed_authority_sha256="$(probe_value "$installation_json" '["authority"]["sha256"]')"
+    fi
     root="$(find_source_root 2>/dev/null || true)"
     if [[ -n "$root" ]]; then
         head="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
@@ -540,13 +881,17 @@ status_command() {
         fi
     fi
     if [[ "$(probe_value "$probe" '["contract"]["matches"]')" == "true" \
-        && "$status" == "Running" && -n "$root" && -n "$head" ]]; then
+        && "$status" == "Running" && "$installation_status" == "recorded" ]]; then
         set +e
-        qualification_json="$(qualification_command "$head" 2>/dev/null)"
-        doctor_json="$(doctor_command --json-internal 2>/dev/null)"
+        qualification_json="$(qualification_command "$installed_guest_root" 2>/dev/null)"
+        doctor_json="$(doctor_for_installation \
+            "$installed_guest_root" \
+            "$installed_authority_kind" \
+            "$installed_authority_sha256" \
+            --json 2>/dev/null)"
         set -e
     fi
-    status_json="$(python3 - "$probe" "$root" "$head" "$tree" "$source_clean" "$INSTALL_RECEIPT" "$authority" "$repository_control" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
+    status_json="$(python3 - "$probe" "$root" "$head" "$tree" "$source_clean" "$installation_json" "$authority" "$repository_control" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
 import hashlib
 import json
 import os
@@ -560,7 +905,7 @@ import sys
     source_head,
     source_tree,
     source_clean_raw,
-    install_receipt_path,
+    installation_context_raw,
     authority_path,
     repository_control_path,
     rollout_receipt_path,
@@ -614,9 +959,6 @@ def read_json(path, label):
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return None, None
 
-def is_hex(value, length):
-    return isinstance(value, str) and len(value) == length and all(character in "0123456789abcdef" for character in value)
-
 def parse_json(raw, schema):
     if raw:
         try:
@@ -629,74 +971,17 @@ def parse_json(raw, schema):
 
 authority, authority_raw = read_json(authority_path, "commissioning authority")
 authority = authority or {}
-license_cleared = authority.get("schema") == "agent-flywheel.license-clearance/v1"
-if license_cleared:
-    commissioning = authority.get("commissioning", {})
-    approved = commissioning.get("resolved_modules", [])
-    independent_holds = commissioning.get("independent_holds", [])
-    license_gate = authority.get("license_gate", {})
-    expected_claim = "LICENSE_CLEARED_PARTIAL"
-    expected_authority_kind = "license_clearance"
-    licensing_cleared = license_gate.get("cleared_count", 0)
-    licensing_pending = license_gate.get("pending_count", 0)
-else:
-    approved = authority.get("allowed_resolved_modules", [])
-    held = authority.get("held_exclusions", {})
-    independent_holds = []
-    expected_claim = "PARTIAL_SAFE"
-    expected_authority_kind = "partial_safe_allowlist"
-    licensing_cleared = 0
-    licensing_pending = held.get("count", 0)
+installation = json.loads(installation_context_raw)
+receipt_modules = installation.get("modules", {}) if installation.get("status") == "recorded" else {}
+receipt_authority = installation.get("authority", {}) if installation.get("status") == "recorded" else {}
+approved = receipt_modules.get("approved_ids", [])
+independent_holds = receipt_modules.get("independent_holds", [])
+licensing_cleared = receipt_modules.get("licensing_cleared", 0)
+licensing_pending = receipt_modules.get("licensing_pending", 0)
+expected_claim = installation.get("claim") or "UNINSTALLED"
+expected_authority_kind = receipt_authority.get("kind")
+license_cleared = expected_authority_kind == "license_clearance"
 current_authority_sha256 = hashlib.sha256(authority_raw).hexdigest() if authority_raw is not None else None
-installation_raw, _ = read_json(install_receipt_path, "installation receipt")
-if not isinstance(installation_raw, dict):
-    installation = {
-        "schema": "agent-flywheel.installation/v1",
-        "status": "receipt_missing",
-    }
-else:
-    receipt_source = installation_raw.get("source", {})
-    receipt_bundle = installation_raw.get("bundle", {})
-    receipt_authority = installation_raw.get("authority", {})
-    receipt_modules = installation_raw.get("modules", {})
-    receipt_valid = bool(
-        installation_raw.get("schema") == "agent-flywheel.installation/v1"
-        and installation_raw.get("claim") == expected_claim
-        and isinstance(receipt_source, dict)
-        and is_hex(receipt_source.get("head"), 40)
-        and is_hex(receipt_source.get("tree"), 40)
-        and receipt_source.get("guest_root") == f"/opt/agent-flywheel-acfs-{receipt_source.get('head')}"
-        and isinstance(receipt_bundle, dict)
-        and is_hex(receipt_bundle.get("sha256"), 64)
-        and isinstance(receipt_authority, dict)
-        and receipt_authority.get("kind") == expected_authority_kind
-        and is_hex(receipt_authority.get("sha256"), 64)
-        and isinstance(receipt_modules, dict)
-        and receipt_modules.get("approved") == len(approved)
-        and receipt_modules.get("licensing_cleared") == licensing_cleared
-        and receipt_modules.get("licensing_pending") == licensing_pending
-    )
-    installation = {
-        "schema": "agent-flywheel.installation/v1",
-        "status": "recorded" if receipt_valid else "receipt_invalid",
-        "claim": installation_raw.get("claim"),
-        "installed_at": installation_raw.get("installed_at"),
-        "source": {
-            "head": receipt_source.get("head"),
-            "tree": receipt_source.get("tree"),
-            "guest_root": receipt_source.get("guest_root"),
-        },
-        "bundle": {"sha256": receipt_bundle.get("sha256")},
-        "authority": {
-            "kind": receipt_authority.get("kind"),
-            "sha256": receipt_authority.get("sha256"),
-        },
-        "modules": {
-            "approved": receipt_modules.get("approved"),
-            "licensing_cleared": receipt_modules.get("licensing_cleared"),
-            "licensing_pending": receipt_modules.get("licensing_pending"),
-        },
-    }
 
 qualification = parse_json(qualification_raw, "agent-flywheel.qualification-host/v1")
 doctor = parse_json(
@@ -716,7 +1001,7 @@ authority_exact = bool(
     current_authority_sha256
     and installation.get("authority", {}).get("sha256") == current_authority_sha256
 )
-installation["matches_current_authority"] = authority_exact
+installation["matches_current_authority"] = authority_exact if current_authority_sha256 else None
 
 rollout = {"status": "not_connected"}
 if rollout_receipt_path:
@@ -750,21 +1035,13 @@ elif vm.get("contract", {}).get("matches") is not True:
     blockers.append({"scope": "lifecycle", "code": "vm_contract_drift", "next_command": "inspect the reported VM mismatches; Flywheel will not replace the VM automatically"})
 elif vm_status != "Running":
     blockers.append({"scope": "lifecycle", "code": "vm_not_running", "next_command": "flywheel start"})
-if not source_root:
-    blockers.append({"scope": "lifecycle", "code": "source_unavailable", "next_command": "set FLYWHEEL_SOURCE_REPO, then run flywheel status"})
-elif not source_clean:
-    blockers.append({"scope": "lifecycle", "code": "source_dirty", "next_command": "preserve source changes, then run flywheel status"})
 if installation.get("status") == "receipt_missing":
     blockers.append({"scope": "lifecycle", "code": "installation_receipt_missing", "next_command": "flywheel mac install"})
 elif installation.get("status") != "recorded":
     blockers.append({"scope": "lifecycle", "code": "installation_receipt_invalid", "next_command": "flywheel mac install"})
-elif not source_exact:
-    blockers.append({"scope": "lifecycle", "code": "installed_source_drift", "next_command": "flywheel mac install"})
-elif not authority_exact:
-    blockers.append({"scope": "lifecycle", "code": "installed_authority_drift", "next_command": "flywheel mac install"})
-if vm["healthy"] and qualification.get("status") != "pass":
+if vm["healthy"] and installation.get("status") == "recorded" and qualification.get("status") != "pass":
     blockers.append({"scope": "qualification", "code": "host_contract_failed", "next_command": "flywheel status --json"})
-if vm["healthy"] and doctor.get("status") != "pass":
+if vm["healthy"] and installation.get("status") == "recorded" and doctor.get("status") != "pass":
     blockers.append({"scope": "doctor", "code": "doctor_failed", "next_command": "flywheel doctor --json"})
 if rollout.get("status") == "not_connected":
     blockers.append({"scope": "repository_rollout", "code": "receipt_not_connected", "next_command": "flywheel status --json --rollout-receipt FILE"})
@@ -786,9 +1063,10 @@ value = {
         "root": source_root or None,
         "head": source_head or None,
         "tree": source_tree or None,
-        "clean": source_clean,
-        "matches_installation": source_exact,
+        "clean": source_clean if source_root else None,
+        "matches_installation": source_exact if source_root else None,
     },
+    "installed_source": installation.get("source") if installation.get("status") == "recorded" else None,
     "installation": installation,
     "modules": {
         "approved": approved,
@@ -836,7 +1114,9 @@ if resources:
     ))
 print("VM contract: {}".format("match" if value["vm"]["contract"]["matches"] else "mismatch"))
 print("VM mismatches: {}".format(", ".join(value["vm"]["mismatches"]) or "none"))
-print("Source: {}".format(value["source"]["head"] or "unavailable"))
+installed_source = value.get("installed_source") or {}
+print("Installed source: {}".format(installed_source.get("head") or "unavailable"))
+print("Checkout: {}".format(value["source"]["head"] or "unavailable"))
 print("Modules: {} approved; {} licensing approvals pending".format(
     value["modules"]["approved_count"],
     value["modules"]["pending_licensing_approvals"],
@@ -857,8 +1137,9 @@ for blocker in value["blockers"]:
 }
 
 qualification_command() {
-    local head="$1"
-    local guest_root="/opt/agent-flywheel-acfs-$head"
+    local guest_root="$1"
+    [[ "$guest_root" =~ ^/opt/agent-flywheel-acfs-[0-9a-f]{40}$ ]] \
+        || die 2 "installation receipt contains an invalid qualification source"
     "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
         HOME=/home/ubuntu \
         PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -866,9 +1147,71 @@ qualification_command() {
         bash -p "$guest_root/scripts/flywheel-qualification-host.sh" --json
 }
 
+doctor_for_installation() {
+    local guest_root="$1"
+    local authority_kind="$2"
+    local authority_sha256="$3"
+    local json_flag="${4:-}"
+    local authority_name=""
+    local authority_file=""
+    local authority_env=(__flywheel_sentinel__)
+    [[ "$guest_root" =~ ^/opt/agent-flywheel-acfs-[0-9a-f]{40}$ \
+        && "$authority_sha256" =~ ^[0-9a-f]{64}$ ]] \
+        || die 2 "installation receipt contains invalid doctor bindings"
+    case "$authority_kind" in
+        partial_safe_allowlist)
+            authority_name="ACFS_PARTIAL_SAFE_ALLOWLIST_FILE"
+            authority_file="/var/lib/agent-flywheel/doctor-allowlist.json"
+            ;;
+        license_clearance)
+            authority_name="ACFS_LICENSE_CLEARANCE_FILE"
+            authority_file="/var/lib/agent-flywheel/doctor-license-clearance.json"
+            ;;
+        *) die 2 "installation receipt contains an unsupported authority" ;;
+    esac
+    "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
+        HOME=/home/ubuntu \
+        PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        bash -p -c '
+set -euo pipefail
+authority_file="$1"
+authority_sha256="$2"
+[[ -f "$authority_file" && ! -L "$authority_file" ]]
+observed_sha256="$(/usr/bin/sha256sum "$authority_file" | /usr/bin/awk "NR == 1 { print \$1 }")"
+[[ "$observed_sha256" == "$authority_sha256" ]]
+' -- "$authority_file" "$authority_sha256" \
+        || return 1
+    authority_env+=("$authority_name=$authority_file")
+    if [[ "$json_flag" == "--json" ]]; then
+        "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
+            HOME=/home/ubuntu \
+            PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            TARGET_USER=ubuntu \
+            TARGET_HOME=/home/ubuntu \
+            FLYWHEEL_SOURCE_ROOT="$guest_root" \
+            "${authority_env[@]:1}" \
+            bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh" --json
+    else
+        "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
+            HOME=/home/ubuntu \
+            PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            TARGET_USER=ubuntu \
+            TARGET_HOME=/home/ubuntu \
+            FLYWHEEL_SOURCE_ROOT="$guest_root" \
+            "${authority_env[@]:1}" \
+            bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh"
+    fi
+}
+
 doctor_command() {
     local force_json="${1:-}"
     local probe=""
+    local installation_json=""
+    local installation_status=""
+    local guest_root=""
+    local authority_kind=""
+    local authority_sha256=""
+    local json_flag=""
     require_mac_tools
     probe="$(vm_probe)"
     [[ "$(probe_value "$probe" '["query_status"]')" == "ok" ]] \
@@ -878,35 +1221,26 @@ doctor_command() {
         || die 1 "Flywheel is stopped; run flywheel start, then flywheel doctor"
     [[ "$(probe_value "$probe" '["contract"]["matches"]')" == "true" ]] \
         || die 2 "existing VM $VM_NAME does not match the Flywheel contract ($(probe_value "$probe" '["mismatches"]')); doctor did not run"
-    local root=""
-    local head=""
-    local guest_root=""
-    # Bash 3.2 with nounset treats expansion of an empty array as unbound.
-    # Keep a sentinel and slice it away so the plain command passes zero args.
-    local doctor_args=(__flywheel_sentinel__)
-    local authority_env=(ACFS_PARTIAL_SAFE_ALLOWLIST_FILE=/var/lib/agent-flywheel/doctor-allowlist.json)
-    root="$(source_root)"
-    head="$(git -C "$root" rev-parse HEAD)"
-    guest_root="/opt/agent-flywheel-acfs-$head"
-    if [[ -f "$root/config/flywheel-license-clearance.json" ]]; then
-        authority_env=(ACFS_LICENSE_CLEARANCE_FILE=/var/lib/agent-flywheel/doctor-license-clearance.json)
+    installation_json="$(installation_receipt_context)"
+    installation_status="$(probe_value "$installation_json" '["status"]')"
+    if [[ "$installation_status" == "receipt_missing" ]]; then
+        die 1 "installation receipt is missing; run flywheel mac install"
     fi
+    [[ "$installation_status" == "recorded" ]] \
+        || die 2 "installation receipt is invalid; run flywheel mac install"
+    guest_root="$(probe_value "$installation_json" '["source"]["guest_root"]')"
+    authority_kind="$(probe_value "$installation_json" '["authority"]["kind"]')"
+    authority_sha256="$(probe_value "$installation_json" '["authority"]["sha256"]')"
     if ((JSON == 1)) || [[ "$force_json" == "--json-internal" ]]; then
-        doctor_args+=(--json)
+        json_flag="--json"
     fi
-    "$LIMACTL" shell "$VM_NAME" -- sudo -u ubuntu env \
-        HOME=/home/ubuntu \
-        PATH=/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        TARGET_USER=ubuntu \
-        TARGET_HOME=/home/ubuntu \
-        FLYWHEEL_SOURCE_ROOT="$guest_root" \
-        "${authority_env[@]}" \
-        bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh" "${doctor_args[@]:1}"
+    doctor_for_installation "$guest_root" "$authority_kind" "$authority_sha256" "$json_flag"
 }
 
 stop_command() {
     local probe=""
     require_mac_tools
+    acquire_lifecycle_lock "stop"
     probe="$(vm_probe)"
     [[ "$(probe_value "$probe" '["query_status"]')" == "ok" ]] \
         || die 3 "cannot query Lima VM inventory; no VM was stopped"
