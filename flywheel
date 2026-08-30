@@ -3,7 +3,12 @@ set -euo pipefail
 shopt -s lastpipe 2>/dev/null || true
 umask 022
 
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/${BASH_SOURCE[0]##*/}"
+# Host lifecycle decisions and publication must never resolve utilities from an
+# inherited PATH. Third-party entrypoints are selected below by absolute path.
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+SELF="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd -P)/${BASH_SOURCE[0]##*/}"
 STATE_HOME="${FLYWHEEL_STATE_HOME:-$HOME/.local/share/agent-flywheel}"
 SOURCE_POINTER="$STATE_HOME/source-root"
 INSTALL_RECEIPT="$STATE_HOME/installation.json"
@@ -11,7 +16,22 @@ VM_NAME="${FLYWHEEL_VM_NAME:-agent-flywheel-ubuntu2404}"
 CANONICAL_VM_NAME="agent-flywheel-ubuntu2404"
 VM_TEMPLATE_RELATIVE="config/flywheel-lima.yaml"
 HEAVY_RUN="${FLYWHEEL_HEAVY_RUN:-$HOME/.local/bin/codex-heavy-run}"
-LIMACTL="${FLYWHEEL_LIMACTL:-$(command -v limactl 2>/dev/null || true)}"
+if [[ -n "${FLYWHEEL_LIMACTL:-}" ]]; then
+    LIMACTL="$FLYWHEEL_LIMACTL"
+elif [[ -x /opt/homebrew/bin/limactl ]]; then
+    LIMACTL=/opt/homebrew/bin/limactl
+elif [[ -x /usr/local/bin/limactl ]]; then
+    LIMACTL=/usr/local/bin/limactl
+else
+    LIMACTL=""
+fi
+if [[ -x /opt/homebrew/bin/gum ]]; then
+    GUM=/opt/homebrew/bin/gum
+elif [[ -x /usr/local/bin/gum ]]; then
+    GUM=/usr/local/bin/gum
+else
+    GUM=""
+fi
 ROLLOUT_RECEIPT="${FLYWHEEL_ROLLOUT_RECEIPT:-}"
 PILOT_RECEIPT=""
 PILOT_SOURCE=""
@@ -34,7 +54,7 @@ cleanup() {
         LOCK_HELPER_PID=""
     fi
     if [[ -n "$TEMP_ROOT" && -d "$TEMP_ROOT" ]]; then
-        rm -rf -- "$TEMP_ROOT"
+        /bin/rm -rf -- "$TEMP_ROOT"
     fi
 }
 
@@ -93,8 +113,8 @@ USAGE
 
 info() {
     ((QUIET == 1)) && return 0
-    if ((NO_GUM == 0)) && command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
-        gum style --foreground 39 "→ $*"
+    if ((NO_GUM == 0)) && [[ -n "$GUM" && -x "$GUM" && -t 1 ]]; then
+        "$GUM" style --foreground 39 "→ $*"
     else
         printf '→ %s\n' "$*"
     fi
@@ -102,8 +122,8 @@ info() {
 
 ok() {
     ((QUIET == 1)) && return 0
-    if ((NO_GUM == 0)) && command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
-        gum style --foreground 42 "✓ $*"
+    if ((NO_GUM == 0)) && [[ -n "$GUM" && -x "$GUM" && -t 1 ]]; then
+        "$GUM" style --foreground 42 "✓ $*"
     else
         printf '✓ %s\n' "$*"
     fi
@@ -189,8 +209,8 @@ raise SystemExit(0 if all(len(item) >= 3 and item[0:1] == b"H" and item[1:2] == 
 
 ensure_temp_root() {
     if [[ -z "$TEMP_ROOT" ]]; then
-        TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flywheel.XXXXXXXX")"
-        chmod 0700 "$TEMP_ROOT"
+        TEMP_ROOT="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/flywheel.XXXXXXXX")"
+        /bin/chmod 0700 "$TEMP_ROOT"
     fi
 }
 
@@ -249,9 +269,9 @@ source_root() {
 }
 
 require_mac_tools() {
-    [[ "$(uname -s)" == "Darwin" ]] \
+    [[ "$(/usr/bin/uname -s)" == "Darwin" ]] \
         || die 3 "Mac lifecycle commands require macOS"
-    [[ -n "$LIMACTL" && -x "$LIMACTL" ]] \
+    [[ -n "$LIMACTL" && "$LIMACTL" == /* && -x "$LIMACTL" && ! -d "$LIMACTL" ]] \
         || die 3 "Lima is required; install it, then retry the same command"
 }
 
@@ -495,28 +515,28 @@ acquire_lifecycle_lock() {
         [[ -d "$STATE_HOME" && ! -L "$STATE_HOME" ]] \
             || die 3 "lifecycle state directory is unavailable or unsafe"
     else
-        mkdir -p "$STATE_HOME"
+        /bin/mkdir -p "$STATE_HOME"
     fi
     if [[ -e "$lock_root" || -L "$lock_root" ]]; then
         [[ -d "$lock_root" && ! -L "$lock_root" ]] \
             || die 3 "lifecycle lock directory is unavailable or unsafe"
     else
-        mkdir "$lock_root"
+        /bin/mkdir "$lock_root"
     fi
-    chmod 0700 "$STATE_HOME" "$lock_root"
+    /bin/chmod 0700 "$STATE_HOME" "$lock_root"
     LOCK_DIR="$lock_root/lifecycle.lock"
-    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    if ! /bin/mkdir "$LOCK_DIR" 2>/dev/null; then
         [[ -d "$LOCK_DIR" && ! -L "$LOCK_DIR" ]] \
             || die 3 "lifecycle lock container is unavailable or unsafe"
     fi
-    chmod 0700 "$LOCK_DIR"
+    /bin/chmod 0700 "$LOCK_DIR"
 
     ensure_temp_root
     control_fifo="$TEMP_ROOT/lifecycle-control"
     result_file="$TEMP_ROOT/lifecycle-lock-result"
     helper_program="$TEMP_ROOT/lifecycle-lock-helper.py"
-    mkfifo -m 0600 "$control_fifo"
-    cat >"$helper_program" <<'PY'
+    /usr/bin/mkfifo -m 0600 "$control_fifo"
+    /bin/cat >"$helper_program" <<'PY'
 import datetime
 import errno
 import fcntl
@@ -586,7 +606,7 @@ finally:
     if descriptor is not None:
         os.close(descriptor)
 PY
-    chmod 0600 "$helper_program"
+    /bin/chmod 0600 "$helper_program"
     /usr/bin/python3 -I "$helper_program" "$LOCK_DIR/owner.lock" "$result_file" "$operation" "$$" \
         <"$control_fifo" &
     LOCK_HELPER_PID=$!
@@ -598,7 +618,7 @@ PY
         if ((attempts >= 100)); then
             break
         fi
-        sleep 0.05
+        /bin/sleep 0.05
     done
     if [[ -s "$result_file" ]]; then
         IFS= read -r result <"$result_file"
@@ -629,9 +649,9 @@ publish_private_file() {
     local candidate=""
     [[ -d "$parent" && ! -L "$parent" ]] \
         || die 3 "state directory is unavailable or unsafe: $parent"
-    candidate="$(mktemp "$parent/.$name.XXXXXXXX")"
-    install -m 0600 "$source" "$candidate"
-    mv -f "$candidate" "$destination"
+    candidate="$(/usr/bin/mktemp "$parent/.$name.XXXXXXXX")"
+    /usr/bin/install -m 0600 "$source" "$candidate"
+    /bin/mv -f "$candidate" "$destination"
 }
 
 verify_guest_source() {
@@ -795,7 +815,7 @@ write_install_receipt() {
         authority_relative="config/flywheel-license-clearance.json"
     fi
     safe_git -C "$root" show "$head:$authority_relative" >"$authority"
-    chmod 0400 "$authority"
+    /bin/chmod 0400 "$authority"
     authority_sha256="$(sha256_file "$authority")"
     /usr/bin/python3 -I - "$head" "$tree" "$guest_root" "$bundle_sha256" "$authority_sha256" "$authority" <<'PY' >"$candidate"
 import datetime
@@ -1077,15 +1097,15 @@ install_command() {
     "$HEAVY_RUN" --stateful -- "$LIMACTL" shell "$VM_NAME" -- \
         sudo /bin/bash -p "$guest_root/scripts/flywheel-mac-install-guest.sh" "$guest_root"
 
-    mkdir -p "$STATE_HOME" "$HOME/.local/bin"
-    chmod 0700 "$STATE_HOME"
+    /bin/mkdir -p "$STATE_HOME" "$HOME/.local/bin"
+    /bin/chmod 0700 "$STATE_HOME"
     printf '%s\n' "$root" >"$TEMP_ROOT/source-root"
     publish_private_file "$TEMP_ROOT/source-root" "$SOURCE_POINTER"
     write_install_receipt "$root" "$head" "$tree" "$guest_root" "$bundle_sha256"
     committed_cli="$TEMP_ROOT/installed-flywheel"
     safe_git -C "$root" show "$head:flywheel" >"$committed_cli"
-    chmod 0500 "$committed_cli"
-    install -m 0755 "$committed_cli" "$installed_cli"
+    /bin/chmod 0500 "$committed_cli"
+    /usr/bin/install -m 0755 "$committed_cli" "$installed_cli"
     ok "Flywheel is installed on Ubuntu and available as flywheel"
 }
 
@@ -1907,7 +1927,7 @@ repository_control_command() {
     ensure_temp_root
     script="$TEMP_ROOT/flywheel-repository-control.py"
     safe_git -C "$root" show "$head:scripts/flywheel-repository-control.py" >"$script"
-    chmod 0500 "$script"
+    /bin/chmod 0500 "$script"
     if [[ "$action" == "eligibility" ]]; then
         [[ -n "$PILOT_RECEIPT" && -n "$PILOT_SOURCE" && -n "$TARGET_REPOSITORY" ]] \
             || die 2 "repository eligibility requires --pilot-receipt, --pilot-source, and --target-repository"

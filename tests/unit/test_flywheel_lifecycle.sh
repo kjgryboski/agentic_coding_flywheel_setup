@@ -376,12 +376,14 @@ chmod 0700 "$FLYWHEEL_STATE_HOME"
 printf 'do-not-overwrite\n' >"$TEST_ROOT/symlink-target"
 ln -s "$TEST_ROOT/symlink-target" "$FLYWHEEL_STATE_HOME/source-root"
 ln -s "$TEST_ROOT/symlink-target" "$FLYWHEEL_STATE_HOME/installation.json"
-# Ambient PATH cannot replace the launcher interpreter, the environment
-# isolation boundary, or the helpers that bind installation hashes.
+# Ambient PATH cannot replace the launcher interpreter, source discovery, VM
+# boundary, atomic publication, or helpers that bind installation hashes.
 HOST_SHIM_DIR="$TEST_ROOT/host-path-shims"
 HOST_SHIM_SENTINEL="$TEST_ROOT/host-path-shim-ran"
 mkdir -p "$HOST_SHIM_DIR"
-for host_shim in bash env shasum awk; do
+for host_shim in \
+    bash env shasum awk dirname limactl uname mktemp install mv chmod mkdir rm \
+    mkfifo cat sleep gum; do
     cat >"$HOST_SHIM_DIR/$host_shim" <<SH
 #!/bin/sh
 printf '%s\n' '$host_shim' >>'$HOST_SHIM_SENTINEL'
