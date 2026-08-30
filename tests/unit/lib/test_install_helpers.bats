@@ -433,6 +433,38 @@ EOF
     [[ ! -e "$startup_marker" ]] || fail "BASH_ENV executed before the verified installer"
 }
 
+@test "run_as_target_runner admits only the reviewed CAAM and SLB environment contracts" {
+    local current_user
+    local current_home
+    local verified_script="$BATS_TEST_TMPDIR/verified-installer.sh"
+
+    current_user="$(command id -un)"
+    current_home="$(_acfs_resolve_target_home "$current_user")"
+    export TARGET_USER="$current_user"
+    export TARGET_HOME="$current_home"
+    printf '%s\n' \
+        'printf "%s|%s|%s\n" "${NONINTERACTIVE:-}" "${INSTALL_DIR:-}" "${PATH:-}"' \
+        > "$verified_script"
+
+    run run_as_target_runner env NONINTERACTIVE=1 "INSTALL_DIR=$current_home/.local/bin" \
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin bash "$verified_script"
+    assert_success
+    assert_output "1|$current_home/.local/bin|/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
+
+    run run_as_target_runner env NONINTERACTIVE=0 bash "$verified_script"
+    assert_failure
+    assert_output --partial "Refusing unapproved clean runner environment variable: NONINTERACTIVE"
+
+    run run_as_target_runner env INSTALL_DIR=/usr/local/bin bash "$verified_script"
+    assert_failure
+    assert_output --partial "Refusing unapproved clean runner environment variable: INSTALL_DIR"
+
+    run run_as_target_runner env PATH=/usr/local/bin:/usr/bin:/bin bash "$verified_script"
+    assert_failure
+    assert_output --partial "Refusing unapproved clean runner environment variable: PATH"
+
+}
+
 @test "run_as_target_runner strips loader controls before its first external command" {
     local helpers="$PROJECT_ROOT/scripts/lib/install_helpers.sh"
 

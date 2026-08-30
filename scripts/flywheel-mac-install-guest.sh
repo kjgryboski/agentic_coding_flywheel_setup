@@ -164,6 +164,7 @@ trap restore_w3_transition EXIT
 apt-get -o Acquire::Retries=3 update
 apt-get -o DPkg::Lock::Timeout=120 install -y \
     curl git ca-certificates unzip tar xz-utils jq build-essential gnupg lsb-release
+bash -p "$SOURCE_ROOT/scripts/flywheel-ensure-swap.sh"
 
 if [[ -f "$ACTIVE_STATE" ]]; then
     if doctor; then
@@ -211,7 +212,9 @@ for module_id in "${install_modules[@]}"; do
     install_args+=(--only "$module_id")
 done
 set +e
-env \
+# limactl may give this lifecycle process a PTY. Start the installer in a new
+# session with closed stdin so --yes cannot discover or reopen that terminal.
+/usr/bin/setsid --wait env \
     "${install_authority[@]}" \
     TARGET_USER="$TARGET_USER" \
     TARGET_HOME="$TARGET_HOME" \
@@ -220,7 +223,7 @@ env \
         --mode vibe \
         --ref "$head" \
         --checksums-ref "$head" \
-        "${install_args[@]}" >"$INSTALL_LOG" 2>&1
+        "${install_args[@]}" </dev/null >"$INSTALL_LOG" 2>&1
 install_status=$?
 set -e
 if ((install_status != 0)); then

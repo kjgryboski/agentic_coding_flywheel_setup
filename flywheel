@@ -8,6 +8,8 @@ STATE_HOME="${FLYWHEEL_STATE_HOME:-$HOME/.local/share/agent-flywheel}"
 SOURCE_POINTER="$STATE_HOME/source-root"
 INSTALL_RECEIPT="$STATE_HOME/installation.json"
 VM_NAME="${FLYWHEEL_VM_NAME:-agent-flywheel-ubuntu2404}"
+CANONICAL_VM_NAME="agent-flywheel-ubuntu2404"
+VM_TEMPLATE_RELATIVE="config/flywheel-lima.yaml"
 HEAVY_RUN="${FLYWHEEL_HEAVY_RUN:-$HOME/.local/bin/codex-heavy-run}"
 LIMACTL="${FLYWHEEL_LIMACTL:-$(command -v limactl 2>/dev/null || true)}"
 ROLLOUT_RECEIPT="${FLYWHEEL_ROLLOUT_RECEIPT:-}"
@@ -112,39 +114,235 @@ require_mac_tools() {
         || die 3 "Lima is required; install it, then retry the same command"
 }
 
-vm_status() {
-    "$LIMACTL" list --json | python3 -c '
-import json, sys
-name=sys.argv[1]
-for line in sys.stdin:
-    try: item=json.loads(line)
-    except json.JSONDecodeError: continue
-    if item.get("name") == name:
-        print(item.get("status", "Unknown"))
-        raise SystemExit(0)
-raise SystemExit(3)
-' "$VM_NAME"
+vm_probe() {
+    local inventory=""
+    if ! inventory="$("$LIMACTL" list --json 2>/dev/null)"; then
+        python3 - "$VM_NAME" "$CANONICAL_VM_NAME" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "query_status": "error",
+    "exists": None,
+    "name": sys.argv[1],
+    "status": "Unavailable",
+    "resources": None,
+    "contract": {
+        "id": "agent-flywheel.mac-vm/v1",
+        "matches": False,
+        "expected_name": sys.argv[2],
+    },
+    "mismatches": ["inventory_query_failed"],
+}, sort_keys=True, separators=(",", ":")))
+PY
+        return 0
+    fi
+    python3 - "$VM_NAME" "$CANONICAL_VM_NAME" "$inventory" <<'PY'
+import json
+import sys
+
+selected_name, expected_name, raw = sys.argv[1:]
+expected = {
+    "name": expected_name,
+    "vm_type": "vz",
+    "architecture": "aarch64",
+    "cpus": 6,
+    "memory_bytes": 10 * 1024 ** 3,
+    "disk_bytes": 68 * 1024 ** 3,
+    "image": {
+        "location": "https://cloud-images.ubuntu.com/releases/24.04/release-20260814/ubuntu-24.04-server-cloudimg-arm64.img",
+        "digest": "sha256:4a281a921b8d7db952895ab619736f10efe9f63e111fa5b5779ed18f023818aa",
+    },
+    "plain": True,
+    "mount_count": 0,
+    "exposed_guest_ports": False,
+}
+try:
+    items = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    if any(not isinstance(item, dict) for item in items):
+        raise ValueError("inventory item is not an object")
+except (json.JSONDecodeError, ValueError):
+    print(json.dumps({
+        "query_status": "error",
+        "exists": None,
+        "name": selected_name,
+        "status": "Unavailable",
+        "resources": None,
+        "contract": {
+            "id": "agent-flywheel.mac-vm/v1",
+            "matches": False,
+            "expected": expected,
+        },
+        "mismatches": ["inventory_response_invalid"],
+    }, sort_keys=True, separators=(",", ":")))
+    raise SystemExit(0)
+
+matches = [item for item in items if item.get("name") == selected_name]
+if len(matches) > 1:
+    print(json.dumps({
+        "query_status": "error",
+        "exists": None,
+        "name": selected_name,
+        "status": "Unavailable",
+        "resources": None,
+        "contract": {
+            "id": "agent-flywheel.mac-vm/v1",
+            "matches": False,
+            "expected": expected,
+        },
+        "mismatches": ["inventory_name_duplicated"],
+    }, sort_keys=True, separators=(",", ":")))
+    raise SystemExit(0)
+
+if not matches:
+    mismatches = ["vm_missing"]
+    if selected_name != expected_name:
+        mismatches.insert(0, "name")
+    print(json.dumps({
+        "query_status": "ok",
+        "exists": False,
+        "name": selected_name,
+        "status": "Missing",
+        "resources": None,
+        "contract": {
+            "id": "agent-flywheel.mac-vm/v1",
+            "matches": False,
+            "expected": expected,
+        },
+        "mismatches": mismatches,
+    }, sort_keys=True, separators=(",", ":")))
+    raise SystemExit(0)
+
+item = matches[0]
+config = item.get("config") if isinstance(item.get("config"), dict) else {}
+images = config.get("images") if isinstance(config.get("images"), list) else []
+image = images[0] if len(images) == 1 and isinstance(images[0], dict) else {}
+mounts = config.get("mounts", [])
+mount_count = len(mounts) if isinstance(mounts, list) else None
+port_forwards = config.get("portForwards", [])
+if isinstance(port_forwards, list):
+    exposed_guest_ports = any(
+        not isinstance(rule, dict) or rule.get("ignore") is not True
+        for rule in port_forwards
+    )
+else:
+    exposed_guest_ports = True
+resources = {
+    "vm_type": item.get("vmType"),
+    "architecture": item.get("arch"),
+    "cpus": item.get("cpus"),
+    "memory_bytes": item.get("memory"),
+    "disk_bytes": item.get("disk"),
+    "image": {
+        "location": image.get("location"),
+        "digest": image.get("digest"),
+    },
+    "plain": config.get("plain"),
+    "mount_count": mount_count,
+    "exposed_guest_ports": exposed_guest_ports,
+}
+mismatches = []
+if selected_name != expected_name:
+    mismatches.append("name")
+for field in ("vm_type", "architecture", "cpus", "memory_bytes", "disk_bytes", "plain", "mount_count", "exposed_guest_ports"):
+    if resources[field] != expected[field]:
+        mismatches.append(field)
+if resources["image"] != expected["image"]:
+    mismatches.append("image")
+print(json.dumps({
+    "query_status": "ok",
+    "exists": True,
+    "name": selected_name,
+    "status": item.get("status", "Unknown"),
+    "resources": resources,
+    "contract": {
+        "id": "agent-flywheel.mac-vm/v1",
+        "matches": not mismatches,
+        "expected": expected,
+    },
+    "mismatches": mismatches,
+}, sort_keys=True, separators=(",", ":")))
+PY
+}
+
+probe_value() {
+    python3 -c 'import json,sys; value=json.loads(sys.argv[1]); result=value'"$2"'; print(json.dumps(result) if isinstance(result, (dict, list, bool)) or result is None else result)' "$1"
 }
 
 ensure_running() {
+    local probe=""
+    local query_status=""
+    local exists=""
     local status=""
-    status="$(vm_status 2>/dev/null || true)"
-    if [[ "$status" == "Running" ]]; then
-        return 0
+    local contract_matches=""
+    local mismatches=""
+    local root=""
+    local template=""
+    [[ "$VM_NAME" == "$CANONICAL_VM_NAME" ]] \
+        || die 2 "unsupported VM name $VM_NAME; the Mac lifecycle contract requires $CANONICAL_VM_NAME"
+    probe="$(vm_probe)"
+    query_status="$(probe_value "$probe" '["query_status"]')"
+    [[ "$query_status" == "ok" ]] \
+        || die 3 "cannot query Lima VM inventory; no VM was created or changed"
+    exists="$(probe_value "$probe" '["exists"]')"
+    status="$(probe_value "$probe" '["status"]')"
+    contract_matches="$(probe_value "$probe" '["contract"]["matches"]')"
+    mismatches="$(probe_value "$probe" '["mismatches"]')"
+    if [[ "$exists" == "false" ]]; then
+        [[ -x "$HEAVY_RUN" ]] \
+            || die 3 "the Mac heavy-work safety guard is unavailable; restore $HEAVY_RUN, then run flywheel start"
+        root="$(source_root)"
+        template="$root/$VM_TEMPLATE_RELATIVE"
+        [[ -f "$template" && ! -L "$template" ]] \
+            || die 3 "the canonical Lima template is unavailable or unsafe: $template"
+        git -C "$root" ls-files --error-unmatch -- "$VM_TEMPLATE_RELATIVE" >/dev/null 2>&1 \
+            || die 2 "the canonical Lima template is not tracked by the exact source checkout; no VM was created"
+        git -C "$root" diff --quiet -- "$VM_TEMPLATE_RELATIVE" \
+            && git -C "$root" diff --cached --quiet -- "$VM_TEMPLATE_RELATIVE" \
+            || die 2 "the canonical Lima template has uncommitted drift; no VM was created"
+        "$LIMACTL" validate "$template" >/dev/null \
+            || die 2 "the canonical Lima template failed validation; no VM was created"
+        info "Creating the isolated Ubuntu Flywheel"
+        "$HEAVY_RUN" --stateful -- "$LIMACTL" start --tty=false --name="$VM_NAME" "$template" \
+            || die 3 "Lima could not create and start $VM_NAME"
+    else
+        [[ "$contract_matches" == "true" ]] \
+            || die 2 "existing VM $VM_NAME does not match the Flywheel contract ($mismatches); it was not changed"
+        if [[ "$status" == "Running" ]]; then
+            return 0
+        fi
+        [[ "$status" == "Stopped" ]] \
+            || die 2 "existing VM $VM_NAME is $status; it was not changed"
+        [[ -x "$HEAVY_RUN" ]] \
+            || die 3 "the Mac heavy-work safety guard is unavailable; restore $HEAVY_RUN, then run flywheel start"
+        info "Starting the Ubuntu Flywheel"
+        "$HEAVY_RUN" --stateful -- "$LIMACTL" start --tty=false "$VM_NAME" \
+            || die 3 "Lima could not start $VM_NAME"
     fi
-    [[ -x "$HEAVY_RUN" ]] \
-        || die 3 "the Mac heavy-work safety guard is unavailable; restore $HEAVY_RUN, then run flywheel start"
-    info "Starting the Ubuntu Flywheel"
-    "$HEAVY_RUN" --stateful -- "$LIMACTL" start "$VM_NAME"
+    probe="$(vm_probe)"
+    query_status="$(probe_value "$probe" '["query_status"]')"
+    exists="$(probe_value "$probe" '["exists"]')"
+    status="$(probe_value "$probe" '["status"]')"
+    contract_matches="$(probe_value "$probe" '["contract"]["matches"]')"
+    mismatches="$(probe_value "$probe" '["mismatches"]')"
+    [[ "$query_status" == "ok" ]] \
+        || die 3 "Lima started work but the VM inventory re-query failed; inspect $VM_NAME before retrying"
+    [[ "$exists" == "true" ]] \
+        || die 3 "Lima reported success but $VM_NAME is still absent"
+    [[ "$contract_matches" == "true" ]] \
+        || die 2 "created or started VM $VM_NAME does not match the Flywheel contract ($mismatches); it was left unchanged for inspection"
+    [[ "$status" == "Running" ]] \
+        || die 3 "Lima reported success but $VM_NAME is $status"
 }
 
-acquire_install_lock() {
+acquire_lifecycle_lock() {
+    local operation="$1"
     local lock_root="$STATE_HOME/locks"
     mkdir -p "$lock_root"
     chmod 0700 "$STATE_HOME" "$lock_root"
-    LOCK_DIR="$lock_root/install.lock"
+    LOCK_DIR="$lock_root/lifecycle.lock"
     if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-        die 5 "another Flywheel install is already running; retry flywheel mac install after it finishes"
+        die 5 "another Flywheel lifecycle operation is running; retry flywheel $operation after it finishes"
     fi
 }
 
@@ -263,7 +461,7 @@ install_command() {
     head="$(git -C "$root" rev-parse HEAD)"
     tree="$(git -C "$root" rev-parse 'HEAD^{tree}')"
 
-    acquire_install_lock
+    acquire_lifecycle_lock "mac install"
     TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flywheel-install.XXXXXXXX")"
     ensure_running
     info "Staging exact source $head"
@@ -290,16 +488,14 @@ install_command() {
 
 start_command() {
     require_mac_tools
-    if [[ "$(vm_status 2>/dev/null || true)" == "Running" ]]; then
-        ok "Flywheel is already running"
-    else
-        ensure_running
-        ok "Flywheel is running"
-    fi
+    acquire_lifecycle_lock "start"
+    ensure_running
+    ok "Flywheel is running"
 }
 
 status_command() {
     require_mac_tools
+    local probe=""
     local status=""
     local root=""
     local head=""
@@ -309,8 +505,8 @@ status_command() {
     local qualification_json=""
     local doctor_json=""
     local status_json=""
-    status="$(vm_status 2>/dev/null || true)"
-    [[ -n "$status" ]] || status="Missing"
+    probe="$(vm_probe)"
+    status="$(probe_value "$probe" '["status"]')"
     root="$(find_source_root 2>/dev/null || true)"
     if [[ -n "$root" ]]; then
         head="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
@@ -325,21 +521,21 @@ status_command() {
             source_clean="true"
         fi
     fi
-    if [[ "$status" == "Running" && -n "$root" && -n "$head" ]]; then
+    if [[ "$(probe_value "$probe" '["contract"]["matches"]')" == "true" \
+        && "$status" == "Running" && -n "$root" && -n "$head" ]]; then
         set +e
         qualification_json="$(qualification_command "$head" 2>/dev/null)"
         doctor_json="$(doctor_command --json-internal 2>/dev/null)"
         set -e
     fi
-    status_json="$(python3 - "$VM_NAME" "$status" "$root" "$head" "$tree" "$source_clean" "$INSTALL_RECEIPT" "$authority" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
+    status_json="$(python3 - "$probe" "$root" "$head" "$tree" "$source_clean" "$INSTALL_RECEIPT" "$authority" "$ROLLOUT_RECEIPT" "$qualification_json" "$doctor_json" <<'PY'
 import hashlib
 import json
 import pathlib
 import sys
 
 (
-    vm_name,
-    vm_status,
+    vm_probe_raw,
     source_root,
     source_head,
     source_tree,
@@ -350,6 +546,15 @@ import sys
     qualification_raw,
     doctor_raw,
 ) = sys.argv[1:]
+
+vm = json.loads(vm_probe_raw)
+vm_status = vm["status"]
+vm["healthy"] = bool(
+    vm.get("query_status") == "ok"
+    and vm.get("exists") is True
+    and vm_status == "Running"
+    and vm.get("contract", {}).get("matches") is True
+)
 
 def read_json(path):
     if not path:
@@ -565,7 +770,13 @@ if rollout_receipt_path:
         rollout = {"status": "invalid", "error": str(error)}
 
 blockers = []
-if vm_status != "Running":
+if vm.get("query_status") != "ok":
+    blockers.append({"scope": "lifecycle", "code": "vm_inventory_unavailable", "next_command": "restore Lima access, then run flywheel status --json"})
+elif vm.get("exists") is not True:
+    blockers.append({"scope": "lifecycle", "code": "vm_missing", "next_command": "flywheel start"})
+elif vm.get("contract", {}).get("matches") is not True:
+    blockers.append({"scope": "lifecycle", "code": "vm_contract_drift", "next_command": "inspect the reported VM mismatches; Flywheel will not replace the VM automatically"})
+elif vm_status != "Running":
     blockers.append({"scope": "lifecycle", "code": "vm_not_running", "next_command": "flywheel start"})
 if not source_root:
     blockers.append({"scope": "lifecycle", "code": "source_unavailable", "next_command": "set FLYWHEEL_SOURCE_REPO, then run flywheel status"})
@@ -579,9 +790,9 @@ elif not source_exact:
     blockers.append({"scope": "lifecycle", "code": "installed_source_drift", "next_command": "flywheel mac install"})
 elif not authority_exact:
     blockers.append({"scope": "lifecycle", "code": "installed_authority_drift", "next_command": "flywheel mac install"})
-if vm_status == "Running" and qualification.get("status") != "pass":
+if vm["healthy"] and qualification.get("status") != "pass":
     blockers.append({"scope": "qualification", "code": "host_contract_failed", "next_command": "flywheel status --json"})
-if vm_status == "Running" and doctor.get("status") != "pass":
+if vm["healthy"] and doctor.get("status") != "pass":
     blockers.append({"scope": "doctor", "code": "doctor_failed", "next_command": "flywheel doctor --json"})
 if rollout.get("status") == "not_connected":
     blockers.append({"scope": "repository_rollout", "code": "receipt_not_connected", "next_command": "flywheel status --json --rollout-receipt FILE"})
@@ -598,7 +809,7 @@ value = {
     "claim": expected_claim,
     "status": vm_status,
     "readiness": "attention" if lifecycle_blocked else "ready",
-    "vm": {"name": vm_name, "status": vm_status, "healthy": vm_status == "Running"},
+    "vm": vm,
     "source": {
         "root": source_root or None,
         "head": source_head or None,
@@ -638,6 +849,21 @@ import json,sys
 value=json.loads(sys.argv[1])
 print("Flywheel: {}".format(value["readiness"]))
 print("VM: {} ({})".format(value["vm"]["name"], value["vm"]["status"]))
+print("VM exists: {}".format(
+    "unknown" if value["vm"]["exists"] is None else ("yes" if value["vm"]["exists"] else "no")
+))
+resources = value["vm"].get("resources")
+if resources:
+    print("VM resources: {}/{}, {} CPU, {} GiB memory, {} GiB disk, plain={}".format(
+        resources["vm_type"],
+        resources["architecture"],
+        resources["cpus"],
+        resources["memory_bytes"] // (1024 ** 3),
+        resources["disk_bytes"] // (1024 ** 3),
+        str(resources["plain"]).lower(),
+    ))
+print("VM contract: {}".format("match" if value["vm"]["contract"]["matches"] else "mismatch"))
+print("VM mismatches: {}".format(", ".join(value["vm"]["mismatches"]) or "none"))
 print("Source: {}".format(value["source"]["head"] or "unavailable"))
 print("Modules: {} approved; {} licensing approvals pending".format(
     value["modules"]["approved_count"],
@@ -670,9 +896,16 @@ qualification_command() {
 
 doctor_command() {
     local force_json="${1:-}"
+    local probe=""
     require_mac_tools
-    [[ "$(vm_status 2>/dev/null || true)" == "Running" ]] \
+    probe="$(vm_probe)"
+    [[ "$(probe_value "$probe" '["query_status"]')" == "ok" ]] \
+        || die 3 "cannot query Lima VM inventory; doctor did not run"
+    [[ "$(probe_value "$probe" '["exists"]')" == "true" \
+        && "$(probe_value "$probe" '["status"]')" == "Running" ]] \
         || die 1 "Flywheel is stopped; run flywheel start, then flywheel doctor"
+    [[ "$(probe_value "$probe" '["contract"]["matches"]')" == "true" ]] \
+        || die 2 "existing VM $VM_NAME does not match the Flywheel contract ($(probe_value "$probe" '["mismatches"]')); doctor did not run"
     local root=""
     local head=""
     local guest_root=""
@@ -700,8 +933,13 @@ doctor_command() {
 }
 
 stop_command() {
+    local probe=""
     require_mac_tools
-    if [[ "$(vm_status 2>/dev/null || true)" != "Running" ]]; then
+    probe="$(vm_probe)"
+    [[ "$(probe_value "$probe" '["query_status"]')" == "ok" ]] \
+        || die 3 "cannot query Lima VM inventory; no VM was stopped"
+    if [[ "$(probe_value "$probe" '["exists"]')" != "true" \
+        || "$(probe_value "$probe" '["status"]')" != "Running" ]]; then
         ok "Flywheel is already stopped"
         return 0
     fi

@@ -82,6 +82,44 @@ else
     record users.ubuntu fail "target user or noninteractive sudo unavailable"
 fi
 
+swap_file="/var/lib/agent-flywheel/swapfile"
+swap_unit="agent-flywheel-swap.service"
+swap_unit_file="/etc/systemd/system/$swap_unit"
+swap_sysctl_file="/etc/sysctl.d/90-agent-flywheel-swap.conf"
+swap_metadata="$(sudo -n stat -Lc '%U:%G:%a:%s:%h' "$swap_file" 2>/dev/null || true)"
+swap_signature="$(sudo -n blkid -p -s TYPE -o value -- "$swap_file" 2>/dev/null || true)"
+swap_unit_content="$(sudo -n cat "$swap_unit_file" 2>/dev/null || true)"
+swap_sysctl_content="$(sudo -n cat "$swap_sysctl_file" 2>/dev/null || true)"
+expected_swap_unit_content="$(cat <<EOF
+[Unit]
+Description=Agent Flywheel persistent swap
+DefaultDependencies=no
+After=local-fs.target
+Before=swap.target
+ConditionPathExists=$swap_file
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/swapon -- $swap_file
+ExecStop=/usr/sbin/swapoff -- $swap_file
+
+[Install]
+WantedBy=swap.target
+EOF
+)"
+if [[ "$swap_metadata" == "root:root:600:8589934592:1" \
+    && "$swap_signature" == "swap" \
+    && "$(sysctl -n vm.swappiness 2>/dev/null || true)" == "10" \
+    && "$(sudo -n systemctl is-enabled "$swap_unit" 2>/dev/null || true)" == "enabled" \
+    && "$swap_sysctl_content" == "vm.swappiness = 10" \
+    && "$swap_unit_content" == "$expected_swap_unit_content" ]] \
+    && awk -v expected="$swap_file" 'NR > 1 && $1 == expected { found = 1 } END { exit !found }' /proc/swaps; then
+    record host.swap_contract pass "8 GiB persistent swap active; vm.swappiness=10"
+else
+    record host.swap_contract fail "swapfile, activation, persistence, or swappiness contract drifted"
+fi
+
 if [[ -d /data/projects && -d "$TARGET_HOME/.acfs" && ! -L /data && ! -L /data/projects && ! -L "$TARGET_HOME/.acfs" ]]; then
     record base.filesystem pass "/data/projects and $TARGET_HOME/.acfs"
 else

@@ -1089,9 +1089,9 @@ acfs_generated_install_stack_meta_skill() {
             local verified_installer_file=""
             local verified_installer_chmod_bin=""
 
-            # meta_skill does not publish a Linux ARM64 binary. Build the exact
-            # operator-approved source revision with its committed dependency lock.
-            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]] && { [[ "$(uname -m 2>/dev/null)" == "aarch64" ]] || [[ "$(uname -m 2>/dev/null)" == "arm64" ]]; }; then
+            # Build the exact operator-approved source revision on every Linux host
+            # with its committed dependency lock.
+            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
                 local ms_source_repo="https://github.com/Dicklesworthstone/meta_skill.git"
                 local ms_source_commit="2a4bc62a04c98d8812bfe68b77c862d87e1731e3"
                 local ms_source_tree="956bd9e6426d120341d50a30722b41ddd7f688c7"
@@ -1159,68 +1159,8 @@ acfs_generated_install_stack_meta_skill() {
                     ACFS_LAST_MODULE_FAILURE_REASON="source build"
                 fi
             else
-                    # Cleared per attempt so a stale reason from an earlier module can
-                    # never be misattributed to this one.
-                    ACFS_LAST_MODULE_FAILURE_REASON=""
-                if acfs_security_init; then
-                    local known_installers_decl=""
-                    # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
-                    known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
-                    if [[ "$known_installers_decl" == declare\ -A* ]]; then
-                        local tool="ms"
-                        local url=""
-                        local expected_sha256=""
-
-                        # Safe access with explicit empty default
-                        url="${KNOWN_INSTALLERS[$tool]:-}"
-                        if ! expected_sha256="$(get_checksum "$tool")"; then
-                            log_error "stack.meta_skill: get_checksum failed for tool '$tool'"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            expected_sha256=""
-                        fi
-
-                        if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
-                            if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
-                                log_error "stack.meta_skill: failed to create verified installer staging file"
-                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                                verified_installer_file=""
-                            elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
-                                log_error "stack.meta_skill: installer verification failed"
-                                : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
-                            elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
-                                log_error "stack.meta_skill: trusted chmod not found for verified installer staging"
-                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
-                                log_error "stack.meta_skill: failed to make verified installer staging file read-only"
-                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                            elif run_as_target_runner 'bash' "$verified_installer_file" '--easy-mode'; then
-                                install_success=true
-                            else
-                                log_error "stack.meta_skill: verified installer execution failed"
-                                ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
-                            fi
-                        else
-                            if [[ -z "$url" ]]; then
-                                log_error "stack.meta_skill: KNOWN_INSTALLERS[$tool] not found"
-                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            fi
-                            if [[ -z "$expected_sha256" ]]; then
-                                log_error "stack.meta_skill: checksum for '$tool' not found"
-                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            fi
-                        fi
-                    else
-                        log_error "stack.meta_skill: KNOWN_INSTALLERS array not available"
-                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                    fi
-                else
-                    log_error "stack.meta_skill: acfs_security_init failed - check security.sh and checksums.yaml"
-                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                fi
-                if [[ -n "$verified_installer_file" ]]; then
-                    _acfs_remove_temp_files "$verified_installer_file"
-                    verified_installer_file=""
-                fi
+                log_error "stack.meta_skill: exact source commissioning is supported only on Linux"
+                ACFS_LAST_MODULE_FAILURE_REASON="unsupported platform"
             fi
 
             # Verified install is required - no fallback
@@ -1238,13 +1178,13 @@ acfs_generated_install_stack_meta_skill() {
 
     # Verify
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: verify: ms --version (target_user)"
+        log_info "dry-run: verify: test \"\$(ms --version 2>/dev/null)\" = \"ms 0.2.2\" (target_user)"
     else
         if ! run_as_target_shell <<'INSTALL_STACK_META_SKILL'
-ms --version
+test "$(ms --version 2>/dev/null)" = "ms 0.2.2"
 INSTALL_STACK_META_SKILL
         then
-            log_error "stack.meta_skill: verify failed: ms --version"
+            log_error "stack.meta_skill: verify failed: test \"\$(ms --version 2>/dev/null)\" = \"ms 0.2.2\""
             return 1
         fi
     fi
@@ -1463,8 +1403,8 @@ acfs_generated_install_stack_jeffreysprompts() {
             local verified_installer_chmod_bin=""
 
             # JeffreysPrompts has no immutable executable installer at the approved
-            # revision. Build its exact Rust workspace revision on Linux ARM64.
-            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]] && { [[ "$(uname -m 2>/dev/null)" == "aarch64" ]] || [[ "$(uname -m 2>/dev/null)" == "arm64" ]]; }; then
+            # revision. Build its exact Rust workspace revision on every Linux host.
+            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
                 local jfp_source_repo="https://github.com/Dicklesworthstone/jeffreysprompts.com.git"
                 local jfp_source_commit="2cec2d5257ef0da32a856b51673f243b6c72a3e2"
                 local jfp_source_tree="79fc4e85f86a6e1e809e212004a4cc848e1d19ee"
@@ -1532,68 +1472,8 @@ acfs_generated_install_stack_jeffreysprompts() {
                     ACFS_LAST_MODULE_FAILURE_REASON="source build"
                 fi
             else
-                    # Cleared per attempt so a stale reason from an earlier module can
-                    # never be misattributed to this one.
-                    ACFS_LAST_MODULE_FAILURE_REASON=""
-                if acfs_security_init; then
-                    local known_installers_decl=""
-                    # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
-                    known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
-                    if [[ "$known_installers_decl" == declare\ -A* ]]; then
-                        local tool="jfp"
-                        local url=""
-                        local expected_sha256=""
-
-                        # Safe access with explicit empty default
-                        url="${KNOWN_INSTALLERS[$tool]:-}"
-                        if ! expected_sha256="$(get_checksum "$tool")"; then
-                            log_error "stack.jeffreysprompts: get_checksum failed for tool '$tool'"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            expected_sha256=""
-                        fi
-
-                        if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
-                            if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
-                                log_error "stack.jeffreysprompts: failed to create verified installer staging file"
-                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                                verified_installer_file=""
-                            elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
-                                log_error "stack.jeffreysprompts: installer verification failed"
-                                : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
-                            elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
-                                log_error "stack.jeffreysprompts: trusted chmod not found for verified installer staging"
-                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
-                                log_error "stack.jeffreysprompts: failed to make verified installer staging file read-only"
-                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                            elif run_as_target_runner 'bash' "$verified_installer_file"; then
-                                install_success=true
-                            else
-                                log_error "stack.jeffreysprompts: verified installer execution failed"
-                                ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
-                            fi
-                        else
-                            if [[ -z "$url" ]]; then
-                                log_error "stack.jeffreysprompts: KNOWN_INSTALLERS[$tool] not found"
-                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            fi
-                            if [[ -z "$expected_sha256" ]]; then
-                                log_error "stack.jeffreysprompts: checksum for '$tool' not found"
-                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            fi
-                        fi
-                    else
-                        log_error "stack.jeffreysprompts: KNOWN_INSTALLERS array not available"
-                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                    fi
-                else
-                    log_error "stack.jeffreysprompts: acfs_security_init failed - check security.sh and checksums.yaml"
-                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                fi
-                if [[ -n "$verified_installer_file" ]]; then
-                    _acfs_remove_temp_files "$verified_installer_file"
-                    verified_installer_file=""
-                fi
+                log_error "stack.jeffreysprompts: exact source commissioning is supported only on Linux"
+                ACFS_LAST_MODULE_FAILURE_REASON="unsupported platform"
             fi
 
             # Verified install is required - no fallback
@@ -1616,15 +1496,15 @@ acfs_generated_install_stack_jeffreysprompts() {
 
     # Verify
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: verify: jfp --version (target_user)"
+        log_info "dry-run: verify: test \"\$(jfp --version 2>/dev/null)\" = \"jfp 0.1.0\" (target_user)"
     else
         if ! run_as_target_shell <<'INSTALL_STACK_JEFFREYSPROMPTS'
-jfp --version
+test "$(jfp --version 2>/dev/null)" = "jfp 0.1.0"
 INSTALL_STACK_JEFFREYSPROMPTS
         then
-            log_warn "stack.jeffreysprompts: verify failed: jfp --version"
+            log_warn "stack.jeffreysprompts: verify failed: test \"\$(jfp --version 2>/dev/null)\" = \"jfp 0.1.0\""
             if type -t record_skipped_tool >/dev/null 2>&1; then
-              record_skipped_tool "stack.jeffreysprompts" "verify failed: jfp --version"
+              record_skipped_tool "stack.jeffreysprompts" "verify failed: test \"\$(jfp --version 2>/dev/null)\" = \"jfp 0.1.0\""
             elif type -t state_tool_skip >/dev/null 2>&1; then
               state_tool_skip "stack.jeffreysprompts"
             fi
@@ -3501,67 +3381,101 @@ acfs_generated_install_stack_rch() {
             local verified_installer_file=""
             local verified_installer_chmod_bin=""
 
-                # Cleared per attempt so a stale reason from an earlier module can
-                # never be misattributed to this one.
-                ACFS_LAST_MODULE_FAILURE_REASON=""
-            if acfs_security_init; then
-                local known_installers_decl=""
-                # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
-                known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
-                if [[ "$known_installers_decl" == declare\ -A* ]]; then
-                    local tool="rch"
-                    local url=""
-                    local expected_sha256=""
+            # RCH release discovery and installer source fallback are mutable.
+            # Build the exact approved source with its two canonical profiles.
+            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
+                local rch_source_repo="https://github.com/Dicklesworthstone/remote_compilation_helper.git"
+                local rch_source_commit="0a982fdee2ca5ce26791dd17b83285916a7b97f6"
+                local rch_source_tree="368cc8c1426f6f7b30c505ffbc6ca9769a5d06d7"
+                local rch_cargo_lock_sha256="c115964866335f4194dd83350f0a800f5af507a99e23943eef31812d79536e4a"
+                local rch_cargo_toml_sha256="17112f2d581bf2916e515dda40fb048d983bb3154285a226fe6a09bef3e8ffc3"
+                local rch_toolchain="nightly-2026-06-06"
+                local rch_source_parent="$TARGET_HOME/.cache/acfs/source-builds"
+                local rch_source_dir=""
+                local rch_target=""
+                local rch_binary=""
+                local rchd_binary=""
+                local rch_wkr_binary=""
+                local rch_version=""
+                local rchd_version=""
+                local rch_wkr_version=""
+                local rch_git_bin=""
+                local rch_mkdir_bin=""
+                local rch_mktemp_bin=""
+                local rch_rm_bin=""
+                local rch_sha256sum_bin=""
+                local rch_cargo_bin="$TARGET_HOME/.cargo/bin/cargo"
+                local rch_rustup_bin="$TARGET_HOME/.cargo/bin/rustup"
 
-                    # Safe access with explicit empty default
-                    url="${KNOWN_INSTALLERS[$tool]:-}"
-                    if ! expected_sha256="$(get_checksum "$tool")"; then
-                        log_error "stack.rch: get_checksum failed for tool '$tool'"
-                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        expected_sha256=""
-                    fi
+                case "$(uname -m 2>/dev/null || true)" in
+                    x86_64|amd64) rch_target="x86_64-unknown-linux-gnu" ;;
+                    aarch64|arm64) rch_target="aarch64-unknown-linux-gnu" ;;
+                esac
+                rch_git_bin="$(acfs_generated_system_binary_path git 2>/dev/null || true)"
+                rch_mkdir_bin="$(acfs_generated_system_binary_path mkdir 2>/dev/null || true)"
+                rch_mktemp_bin="$(acfs_generated_system_binary_path mktemp 2>/dev/null || true)"
+                rch_rm_bin="$(acfs_generated_system_binary_path rm 2>/dev/null || true)"
+                rch_sha256sum_bin="$(acfs_generated_system_binary_path sha256sum 2>/dev/null || true)"
 
-                    if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
-                        if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
-                            log_error "stack.rch: failed to create verified installer staging file"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                            verified_installer_file=""
-                        elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
-                            log_error "stack.rch: installer verification failed"
-                            : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
-                        elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
-                            log_error "stack.rch: trusted chmod not found for verified installer staging"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
-                            log_error "stack.rch: failed to make verified installer staging file read-only"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'bash' "$verified_installer_file" '--easy-mode'; then
-                            install_success=true
-                        else
-                            log_error "stack.rch: verified installer execution failed"
-                            ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
-                        fi
-                    else
-                        if [[ -z "$url" ]]; then
-                            log_error "stack.rch: KNOWN_INSTALLERS[$tool] not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                        if [[ -z "$expected_sha256" ]]; then
-                            log_error "stack.rch: checksum for '$tool' not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                    fi
-                else
-                    log_error "stack.rch: KNOWN_INSTALLERS array not available"
+                if [[ -z "$rch_target" || -z "$rch_git_bin" || -z "$rch_mkdir_bin" || -z "$rch_mktemp_bin" || -z "$rch_rm_bin" || -z "$rch_sha256sum_bin" || ! -x "$rch_cargo_bin" || ! -x "$rch_rustup_bin" ]]; then
+                    log_error "stack.rch: exact source build prerequisites are unavailable"
                     ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$rch_source_parent" ]]; then
+                    log_error "stack.rch: refusing source build through an invalid or symlinked target-home path"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif ! run_as_target "$rch_mkdir_bin" -p "$rch_source_parent"; then
+                    log_error "stack.rch: failed to prepare the confined source-build directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif [[ ! -d "$rch_source_parent" || -L "$rch_source_parent" ]]; then
+                    log_error "stack.rch: source-build directory is not a confined real directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif ! rch_source_dir="$(run_as_target "$rch_mktemp_bin" -d "$rch_source_parent/rch.XXXXXX" 2>/dev/null)"; then
+                    log_error "stack.rch: failed to create the source-build staging directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif [[ "$rch_source_dir" != "$rch_source_parent"/rch.* || ! -d "$rch_source_dir" || -L "$rch_source_dir" ]]; then
+                    log_error "stack.rch: source-build staging directory escaped its trusted template"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif (
+                    set -euo pipefail
+                    trap 'run_as_target "$rch_rm_bin" -rf -- "$rch_source_dir" >/dev/null 2>&1 || true' EXIT
+                    run_as_target "$rch_git_bin" -c core.hooksPath=/dev/null clone --filter=blob:none --no-checkout "$rch_source_repo" "$rch_source_dir/src"
+                    run_as_target "$rch_git_bin" -C "$rch_source_dir/src" -c core.hooksPath=/dev/null fetch --depth 1 origin "$rch_source_commit"
+                    run_as_target "$rch_git_bin" -C "$rch_source_dir/src" -c core.hooksPath=/dev/null checkout --detach "$rch_source_commit"
+                    [[ "$(run_as_target "$rch_git_bin" -C "$rch_source_dir/src" rev-parse HEAD)" == "$rch_source_commit" ]]
+                    [[ "$(run_as_target "$rch_git_bin" -C "$rch_source_dir/src" rev-parse "HEAD^{tree}")" == "$rch_source_tree" ]]
+                    [[ "$(run_as_target "$rch_sha256sum_bin" "$rch_source_dir/src/Cargo.lock" | awk 'NR == 1 { print $1 }')" == "$rch_cargo_lock_sha256" ]]
+                    [[ "$(run_as_target "$rch_sha256sum_bin" "$rch_source_dir/src/Cargo.toml" | awk 'NR == 1 { print $1 }')" == "$rch_cargo_toml_sha256" ]]
+                    [[ -z "$(run_as_target "$rch_git_bin" -C "$rch_source_dir/src" status --porcelain=v1 --untracked-files=all)" ]]
+                    run_as_target "$rch_rustup_bin" toolchain install "$rch_toolchain" --profile minimal --no-self-update
+                    run_as_target env RCH_GIT_COMMIT="$rch_source_commit" CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$rch_cargo_bin" +"$rch_toolchain" build --locked --jobs 1 --target "$rch_target" --profile wrapper-release --package rch --bin rch --manifest-path "$rch_source_dir/src/Cargo.toml" --target-dir "$rch_source_dir/target"
+                    run_as_target env RCH_GIT_COMMIT="$rch_source_commit" CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$rch_cargo_bin" +"$rch_toolchain" build --locked --jobs 1 --target "$rch_target" --profile daemon-release --package rchd --package rch-wkr --manifest-path "$rch_source_dir/src/Cargo.toml" --target-dir "$rch_source_dir/target"
+                    rch_binary="$rch_source_dir/target/$rch_target/wrapper-release/rch"
+                    rchd_binary="$rch_source_dir/target/$rch_target/daemon-release/rchd"
+                    rch_wkr_binary="$rch_source_dir/target/$rch_target/daemon-release/rch-wkr"
+                    [[ -f "$rch_binary" && -x "$rch_binary" && ! -L "$rch_binary" ]]
+                    [[ -f "$rchd_binary" && -x "$rchd_binary" && ! -L "$rchd_binary" ]]
+                    [[ -f "$rch_wkr_binary" && -x "$rch_wkr_binary" && ! -L "$rch_wkr_binary" ]]
+                    rch_version="$(run_as_target "$rch_binary" --version 2>/dev/null)"
+                    rchd_version="$(run_as_target "$rchd_binary" --version 2>/dev/null)"
+                    rch_wkr_version="$(run_as_target "$rch_wkr_binary" --version 2>/dev/null)"
+                    [[ "$rch_version" == "rch 1.0.60 (commit 0a982fdee2ca)" ]]
+                    [[ "$rchd_version" == "rchd 1.0.60 (commit 0a982fdee2ca)" ]]
+                    [[ "$rch_wkr_version" == "rch-wkr 1.0.60 (commit 0a982fdee2ca)" ]]
+                    acfs_install_executable_into_primary_bin "$rch_binary" rch
+                    acfs_install_executable_into_primary_bin "$rchd_binary" rchd
+                    acfs_install_executable_into_primary_bin "$rch_wkr_binary" rch-wkr
+                ); then
+                    install_success=true
+                else
+                    if [[ -n "$rch_source_dir" && "$rch_source_dir" == "$rch_source_parent"/rch.* && -d "$rch_source_dir" && ! -L "$rch_source_dir" ]]; then
+                        run_as_target "$rch_rm_bin" -rf -- "$rch_source_dir" >/dev/null 2>&1 || true
+                    fi
+                    log_error "stack.rch: exact source build failed"
+                    ACFS_LAST_MODULE_FAILURE_REASON="source build"
                 fi
             else
-                log_error "stack.rch: acfs_security_init failed - check security.sh and checksums.yaml"
-                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-            fi
-            if [[ -n "$verified_installer_file" ]]; then
-                _acfs_remove_temp_files "$verified_installer_file"
-                verified_installer_file=""
+                log_error "stack.rch: exact source commissioning is supported only on Linux"
+                ACFS_LAST_MODULE_FAILURE_REASON="unsupported platform"
             fi
 
             # Verified install is required - no fallback
@@ -3584,15 +3498,47 @@ acfs_generated_install_stack_rch() {
 
     # Verify
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: verify: rch --version || rch --help (target_user)"
+        log_info "dry-run: verify: test \"\$(rch --version 2>/dev/null)\" = \"rch 1.0.60 (commit 0a982fdee2ca)\" (target_user)"
     else
         if ! run_as_target_shell <<'INSTALL_STACK_RCH'
-rch --version || rch --help
+test "$(rch --version 2>/dev/null)" = "rch 1.0.60 (commit 0a982fdee2ca)"
 INSTALL_STACK_RCH
         then
-            log_warn "stack.rch: verify failed: rch --version || rch --help"
+            log_warn "stack.rch: verify failed: test \"\$(rch --version 2>/dev/null)\" = \"rch 1.0.60 (commit 0a982fdee2ca)\""
             if type -t record_skipped_tool >/dev/null 2>&1; then
-              record_skipped_tool "stack.rch" "verify failed: rch --version || rch --help"
+              record_skipped_tool "stack.rch" "verify failed: test \"\$(rch --version 2>/dev/null)\" = \"rch 1.0.60 (commit 0a982fdee2ca)\""
+            elif type -t state_tool_skip >/dev/null 2>&1; then
+              state_tool_skip "stack.rch"
+            fi
+            return 0
+        fi
+    fi
+    if [[ "${DRY_RUN:-false}" = "true" ]]; then
+        log_info "dry-run: verify: test \"\$(rchd --version 2>/dev/null)\" = \"rchd 1.0.60 (commit 0a982fdee2ca)\" (target_user)"
+    else
+        if ! run_as_target_shell <<'INSTALL_STACK_RCH'
+test "$(rchd --version 2>/dev/null)" = "rchd 1.0.60 (commit 0a982fdee2ca)"
+INSTALL_STACK_RCH
+        then
+            log_warn "stack.rch: verify failed: test \"\$(rchd --version 2>/dev/null)\" = \"rchd 1.0.60 (commit 0a982fdee2ca)\""
+            if type -t record_skipped_tool >/dev/null 2>&1; then
+              record_skipped_tool "stack.rch" "verify failed: test \"\$(rchd --version 2>/dev/null)\" = \"rchd 1.0.60 (commit 0a982fdee2ca)\""
+            elif type -t state_tool_skip >/dev/null 2>&1; then
+              state_tool_skip "stack.rch"
+            fi
+            return 0
+        fi
+    fi
+    if [[ "${DRY_RUN:-false}" = "true" ]]; then
+        log_info "dry-run: verify: test \"\$(rch-wkr --version 2>/dev/null)\" = \"rch-wkr 1.0.60 (commit 0a982fdee2ca)\" (target_user)"
+    else
+        if ! run_as_target_shell <<'INSTALL_STACK_RCH'
+test "$(rch-wkr --version 2>/dev/null)" = "rch-wkr 1.0.60 (commit 0a982fdee2ca)"
+INSTALL_STACK_RCH
+        then
+            log_warn "stack.rch: verify failed: test \"\$(rch-wkr --version 2>/dev/null)\" = \"rch-wkr 1.0.60 (commit 0a982fdee2ca)\""
+            if type -t record_skipped_tool >/dev/null 2>&1; then
+              record_skipped_tool "stack.rch" "verify failed: test \"\$(rch-wkr --version 2>/dev/null)\" = \"rch-wkr 1.0.60 (commit 0a982fdee2ca)\""
             elif type -t state_tool_skip >/dev/null 2>&1; then
               state_tool_skip "stack.rch"
             fi
@@ -3760,7 +3706,7 @@ acfs_generated_install_stack_srps() {
                         elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
                             log_error "stack.srps: failed to make verified installer staging file read-only"
                             ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'bash' "$verified_installer_file" '--install'; then
+                        elif run_as_target_runner 'env' 'PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin' 'bash' "$verified_installer_file" '--install'; then
                             install_success=true
                         else
                             log_error "stack.srps: verified installer execution failed"
@@ -3809,15 +3755,15 @@ acfs_generated_install_stack_srps() {
 
     # Verify
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: verify: command -v sysmoni (target_user)"
+        log_info "dry-run: verify: test -x /usr/local/bin/sysmoni (target_user)"
     else
         if ! run_as_target_shell <<'INSTALL_STACK_SRPS'
-command -v sysmoni
+test -x /usr/local/bin/sysmoni
 INSTALL_STACK_SRPS
         then
-            log_warn "stack.srps: verify failed: command -v sysmoni"
+            log_warn "stack.srps: verify failed: test -x /usr/local/bin/sysmoni"
             if type -t record_skipped_tool >/dev/null 2>&1; then
-              record_skipped_tool "stack.srps" "verify failed: command -v sysmoni"
+              record_skipped_tool "stack.srps" "verify failed: test -x /usr/local/bin/sysmoni"
             elif type -t state_tool_skip >/dev/null 2>&1; then
               state_tool_skip "stack.srps"
             fi
@@ -4950,9 +4896,8 @@ acfs_generated_install_stack_eidetic_engine_cli() {
             local verified_installer_file=""
             local verified_installer_chmod_bin=""
 
-            # Eidetic Engine release binaries require a newer glibc than Ubuntu
-            # 24.04 on ARM64. Build the approved source and its locked siblings.
-            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]] && { [[ "$(uname -m 2>/dev/null)" == "aarch64" ]] || [[ "$(uname -m 2>/dev/null)" == "arm64" ]]; }; then
+            # Build the approved source and its locked siblings on every Linux host.
+            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
                 local ee_source_repo="https://github.com/Dicklesworthstone/eidetic_engine_cli.git"
                 local ee_source_commit="0fc6801c91edc0764cf405b049024a25c3199e09"
                 local ee_source_tree="179ac1bb86320f3874b34cec1cbcca2b85c7eadf"
@@ -5009,7 +4954,7 @@ acfs_generated_install_stack_eidetic_engine_cli() {
                     [[ "$(run_as_target "$ee_sha256sum_bin" "$ee_source_dir/eidetic_engine_cli/scripts/checkout-franken-stack.sh" | awk 'NR == 1 { print $1 }')" == "$ee_checkout_sha256" ]]
                     [[ -z "$(run_as_target "$ee_git_bin" -C "$ee_source_dir/eidetic_engine_cli" status --porcelain=v1 --untracked-files=all)" ]]
                     run_as_target env PATH="$TARGET_HOME/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" bash "$ee_source_dir/eidetic_engine_cli/scripts/checkout-franken-stack.sh" "$ee_source_dir"
-                    run_as_target env CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" build --release --locked --bin ee --manifest-path "$ee_source_dir/eidetic_engine_cli/Cargo.toml" --target-dir "$ee_source_dir/target"
+                    run_as_target env CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" build --jobs 1 --release --locked --bin ee --manifest-path "$ee_source_dir/eidetic_engine_cli/Cargo.toml" --target-dir "$ee_source_dir/target"
                     ee_binary="$ee_source_dir/target/release/ee"
                     [[ -f "$ee_binary" && -x "$ee_binary" && ! -L "$ee_binary" ]]
                     ee_version="$(run_as_target "$ee_binary" --version 2>/dev/null)"
@@ -5025,68 +4970,8 @@ acfs_generated_install_stack_eidetic_engine_cli() {
                     ACFS_LAST_MODULE_FAILURE_REASON="source build"
                 fi
             else
-                    # Cleared per attempt so a stale reason from an earlier module can
-                    # never be misattributed to this one.
-                    ACFS_LAST_MODULE_FAILURE_REASON=""
-                if acfs_security_init; then
-                    local known_installers_decl=""
-                    # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
-                    known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
-                    if [[ "$known_installers_decl" == declare\ -A* ]]; then
-                        local tool="ee"
-                        local url=""
-                        local expected_sha256=""
-
-                        # Safe access with explicit empty default
-                        url="${KNOWN_INSTALLERS[$tool]:-}"
-                        if ! expected_sha256="$(get_checksum "$tool")"; then
-                            log_error "stack.eidetic_engine_cli: get_checksum failed for tool '$tool'"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            expected_sha256=""
-                        fi
-
-                        if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
-                            if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
-                                log_error "stack.eidetic_engine_cli: failed to create verified installer staging file"
-                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                                verified_installer_file=""
-                            elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
-                                log_error "stack.eidetic_engine_cli: installer verification failed"
-                                : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
-                            elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
-                                log_error "stack.eidetic_engine_cli: trusted chmod not found for verified installer staging"
-                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
-                                log_error "stack.eidetic_engine_cli: failed to make verified installer staging file read-only"
-                                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                            elif run_as_target_runner 'bash' "$verified_installer_file" '--easy-mode'; then
-                                install_success=true
-                            else
-                                log_error "stack.eidetic_engine_cli: verified installer execution failed"
-                                ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
-                            fi
-                        else
-                            if [[ -z "$url" ]]; then
-                                log_error "stack.eidetic_engine_cli: KNOWN_INSTALLERS[$tool] not found"
-                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            fi
-                            if [[ -z "$expected_sha256" ]]; then
-                                log_error "stack.eidetic_engine_cli: checksum for '$tool' not found"
-                                ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                            fi
-                        fi
-                    else
-                        log_error "stack.eidetic_engine_cli: KNOWN_INSTALLERS array not available"
-                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                    fi
-                else
-                    log_error "stack.eidetic_engine_cli: acfs_security_init failed - check security.sh and checksums.yaml"
-                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                fi
-                if [[ -n "$verified_installer_file" ]]; then
-                    _acfs_remove_temp_files "$verified_installer_file"
-                    verified_installer_file=""
-                fi
+                log_error "stack.eidetic_engine_cli: exact source commissioning is supported only on Linux"
+                ACFS_LAST_MODULE_FAILURE_REASON="unsupported platform"
             fi
 
             # Verified install is required - no fallback
@@ -5109,15 +4994,15 @@ acfs_generated_install_stack_eidetic_engine_cli() {
 
     # Verify
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: verify: ee --version || ee --help (target_user)"
+        log_info "dry-run: verify: test \"\$(ee --version 2>/dev/null)\" = \"ee 0.14.2\" (target_user)"
     else
         if ! run_as_target_shell <<'INSTALL_STACK_EIDETIC_ENGINE_CLI'
-ee --version || ee --help
+test "$(ee --version 2>/dev/null)" = "ee 0.14.2"
 INSTALL_STACK_EIDETIC_ENGINE_CLI
         then
-            log_warn "stack.eidetic_engine_cli: verify failed: ee --version || ee --help"
+            log_warn "stack.eidetic_engine_cli: verify failed: test \"\$(ee --version 2>/dev/null)\" = \"ee 0.14.2\""
             if type -t record_skipped_tool >/dev/null 2>&1; then
-              record_skipped_tool "stack.eidetic_engine_cli" "verify failed: ee --version || ee --help"
+              record_skipped_tool "stack.eidetic_engine_cli" "verify failed: test \"\$(ee --version 2>/dev/null)\" = \"ee 0.14.2\""
             elif type -t state_tool_skip >/dev/null 2>&1; then
               state_tool_skip "stack.eidetic_engine_cli"
             fi
@@ -5172,67 +5057,86 @@ acfs_generated_install_stack_franken_markdown() {
             local verified_installer_file=""
             local verified_installer_chmod_bin=""
 
-                # Cleared per attempt so a stale reason from an earlier module can
-                # never be misattributed to this one.
-                ACFS_LAST_MODULE_FAILURE_REASON=""
-            if acfs_security_init; then
-                local known_installers_decl=""
-                # Check if KNOWN_INSTALLERS is available as an associative array (declare -A)
-                known_installers_decl="$(declare -p KNOWN_INSTALLERS 2>/dev/null || true)"
-                if [[ "$known_installers_decl" == declare\ -A* ]]; then
-                    local tool="fmd"
-                    local url=""
-                    local expected_sha256=""
+            # Franken Markdown release discovery and installer source fallback are
+            # mutable. Build the exact approved source with its committed lock.
+            if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
+                local fmd_source_repo="https://github.com/Dicklesworthstone/franken_markdown.git"
+                local fmd_source_commit="5637bad86e3c0deacab6411a734715015b143a12"
+                local fmd_source_tree="f2d92693543fb542596f4aa00a402e832938caf1"
+                local fmd_cargo_lock_sha256="3114ddb930a116a042e62d36f3a906f341414f6791383360c179c6337cb54ff0"
+                local fmd_cargo_toml_sha256="8cd3d68fcc88ede03ef1179d93fad1828d517b61469b3ef3c89aed237dcddabd"
+                local fmd_toolchain="nightly-2026-08-25"
+                local fmd_source_parent="$TARGET_HOME/.cache/acfs/source-builds"
+                local fmd_source_dir=""
+                local fmd_target=""
+                local fmd_binary=""
+                local fmd_version=""
+                local fmd_git_bin=""
+                local fmd_mkdir_bin=""
+                local fmd_mktemp_bin=""
+                local fmd_rm_bin=""
+                local fmd_sha256sum_bin=""
+                local fmd_cargo_bin="$TARGET_HOME/.cargo/bin/cargo"
+                local fmd_rustup_bin="$TARGET_HOME/.cargo/bin/rustup"
 
-                    # Safe access with explicit empty default
-                    url="${KNOWN_INSTALLERS[$tool]:-}"
-                    if ! expected_sha256="$(get_checksum "$tool")"; then
-                        log_error "stack.franken_markdown: get_checksum failed for tool '$tool'"
-                        ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        expected_sha256=""
-                    fi
+                case "$(uname -m 2>/dev/null || true)" in
+                    x86_64|amd64) fmd_target="x86_64-unknown-linux-gnu" ;;
+                    aarch64|arm64) fmd_target="aarch64-unknown-linux-gnu" ;;
+                esac
+                fmd_git_bin="$(acfs_generated_system_binary_path git 2>/dev/null || true)"
+                fmd_mkdir_bin="$(acfs_generated_system_binary_path mkdir 2>/dev/null || true)"
+                fmd_mktemp_bin="$(acfs_generated_system_binary_path mktemp 2>/dev/null || true)"
+                fmd_rm_bin="$(acfs_generated_system_binary_path rm 2>/dev/null || true)"
+                fmd_sha256sum_bin="$(acfs_generated_system_binary_path sha256sum 2>/dev/null || true)"
 
-                    if [[ -n "$url" ]] && [[ -n "$expected_sha256" ]]; then
-                        if ! verified_installer_file="$(acfs_security_mktemp "/tmp/acfs-verified-installer.XXXXXX" 2>/dev/null)" || [[ -z "$verified_installer_file" ]]; then
-                            log_error "stack.franken_markdown: failed to create verified installer staging file"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                            verified_installer_file=""
-                        elif ! verify_checksum "$url" "$expected_sha256" "$tool" > "$verified_installer_file"; then
-                            log_error "stack.franken_markdown: installer verification failed"
-                            : "${ACFS_LAST_MODULE_FAILURE_REASON:=checksum}"
-                        elif ! verified_installer_chmod_bin="$(acfs_generated_system_binary_path chmod 2>/dev/null)"; then
-                            log_error "stack.franken_markdown: trusted chmod not found for verified installer staging"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        elif ! "$verified_installer_chmod_bin" 0444 "$verified_installer_file"; then
-                            log_error "stack.franken_markdown: failed to make verified installer staging file read-only"
-                            ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-                        elif run_as_target_runner 'bash' "$verified_installer_file" '--easy-mode'; then
-                            install_success=true
-                        else
-                            log_error "stack.franken_markdown: verified installer execution failed"
-                            ACFS_LAST_MODULE_FAILURE_REASON="installer execution"
-                        fi
-                    else
-                        if [[ -z "$url" ]]; then
-                            log_error "stack.franken_markdown: KNOWN_INSTALLERS[$tool] not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                        if [[ -z "$expected_sha256" ]]; then
-                            log_error "stack.franken_markdown: checksum for '$tool' not found"
-                            ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
-                        fi
-                    fi
-                else
-                    log_error "stack.franken_markdown: KNOWN_INSTALLERS array not available"
+                if [[ -z "$fmd_target" || -z "$fmd_git_bin" || -z "$fmd_mkdir_bin" || -z "$fmd_mktemp_bin" || -z "$fmd_rm_bin" || -z "$fmd_sha256sum_bin" || ! -x "$fmd_cargo_bin" || ! -x "$fmd_rustup_bin" ]]; then
+                    log_error "stack.franken_markdown: exact source build prerequisites are unavailable"
                     ACFS_LAST_MODULE_FAILURE_REASON="missing dependency"
+                elif [[ "$TARGET_HOME" != /* || "$TARGET_HOME" == "/" || -L "$TARGET_HOME" || -L "$TARGET_HOME/.cache" || -L "$TARGET_HOME/.cache/acfs" || -L "$fmd_source_parent" ]]; then
+                    log_error "stack.franken_markdown: refusing source build through an invalid or symlinked target-home path"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif ! run_as_target "$fmd_mkdir_bin" -p "$fmd_source_parent"; then
+                    log_error "stack.franken_markdown: failed to prepare the confined source-build directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif [[ ! -d "$fmd_source_parent" || -L "$fmd_source_parent" ]]; then
+                    log_error "stack.franken_markdown: source-build directory is not a confined real directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif ! fmd_source_dir="$(run_as_target "$fmd_mktemp_bin" -d "$fmd_source_parent/fmd.XXXXXX" 2>/dev/null)"; then
+                    log_error "stack.franken_markdown: failed to create the source-build staging directory"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif [[ "$fmd_source_dir" != "$fmd_source_parent"/fmd.* || ! -d "$fmd_source_dir" || -L "$fmd_source_dir" ]]; then
+                    log_error "stack.franken_markdown: source-build staging directory escaped its trusted template"
+                    ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
+                elif (
+                    set -euo pipefail
+                    trap 'run_as_target "$fmd_rm_bin" -rf -- "$fmd_source_dir" >/dev/null 2>&1 || true' EXIT
+                    run_as_target "$fmd_git_bin" -c core.hooksPath=/dev/null clone --filter=blob:none --no-checkout "$fmd_source_repo" "$fmd_source_dir/src"
+                    run_as_target "$fmd_git_bin" -C "$fmd_source_dir/src" -c core.hooksPath=/dev/null fetch --depth 1 origin "$fmd_source_commit"
+                    run_as_target "$fmd_git_bin" -C "$fmd_source_dir/src" -c core.hooksPath=/dev/null checkout --detach "$fmd_source_commit"
+                    [[ "$(run_as_target "$fmd_git_bin" -C "$fmd_source_dir/src" rev-parse HEAD)" == "$fmd_source_commit" ]]
+                    [[ "$(run_as_target "$fmd_git_bin" -C "$fmd_source_dir/src" rev-parse "HEAD^{tree}")" == "$fmd_source_tree" ]]
+                    [[ "$(run_as_target "$fmd_sha256sum_bin" "$fmd_source_dir/src/Cargo.lock" | awk 'NR == 1 { print $1 }')" == "$fmd_cargo_lock_sha256" ]]
+                    [[ "$(run_as_target "$fmd_sha256sum_bin" "$fmd_source_dir/src/Cargo.toml" | awk 'NR == 1 { print $1 }')" == "$fmd_cargo_toml_sha256" ]]
+                    [[ -z "$(run_as_target "$fmd_git_bin" -C "$fmd_source_dir/src" status --porcelain=v1 --untracked-files=all)" ]]
+                    run_as_target "$fmd_rustup_bin" toolchain install "$fmd_toolchain" --profile minimal --no-self-update
+                    run_as_target env CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$fmd_cargo_bin" +"$fmd_toolchain" build --locked --jobs 1 --target "$fmd_target" --release --package franken_markdown --bin fmd --manifest-path "$fmd_source_dir/src/Cargo.toml" --target-dir "$fmd_source_dir/target"
+                    fmd_binary="$fmd_source_dir/target/$fmd_target/release/fmd"
+                    [[ -f "$fmd_binary" && -x "$fmd_binary" && ! -L "$fmd_binary" ]]
+                    fmd_version="$(run_as_target "$fmd_binary" --version 2>/dev/null)"
+                    [[ "$fmd_version" == "fmd 0.4.2" ]]
+                    acfs_install_executable_into_primary_bin "$fmd_binary" fmd
+                ); then
+                    install_success=true
+                else
+                    if [[ -n "$fmd_source_dir" && "$fmd_source_dir" == "$fmd_source_parent"/fmd.* && -d "$fmd_source_dir" && ! -L "$fmd_source_dir" ]]; then
+                        run_as_target "$fmd_rm_bin" -rf -- "$fmd_source_dir" >/dev/null 2>&1 || true
+                    fi
+                    log_error "stack.franken_markdown: exact source build failed"
+                    ACFS_LAST_MODULE_FAILURE_REASON="source build"
                 fi
             else
-                log_error "stack.franken_markdown: acfs_security_init failed - check security.sh and checksums.yaml"
-                ACFS_LAST_MODULE_FAILURE_REASON="environment setup"
-            fi
-            if [[ -n "$verified_installer_file" ]]; then
-                _acfs_remove_temp_files "$verified_installer_file"
-                verified_installer_file=""
+                log_error "stack.franken_markdown: exact source commissioning is supported only on Linux"
+                ACFS_LAST_MODULE_FAILURE_REASON="unsupported platform"
             fi
 
             # Verified install is required - no fallback
@@ -5255,15 +5159,15 @@ acfs_generated_install_stack_franken_markdown() {
 
     # Verify
     if [[ "${DRY_RUN:-false}" = "true" ]]; then
-        log_info "dry-run: verify: fmd --version || fmd --help (target_user)"
+        log_info "dry-run: verify: test \"\$(fmd --version 2>/dev/null)\" = \"fmd 0.4.2\" (target_user)"
     else
         if ! run_as_target_shell <<'INSTALL_STACK_FRANKEN_MARKDOWN'
-fmd --version || fmd --help
+test "$(fmd --version 2>/dev/null)" = "fmd 0.4.2"
 INSTALL_STACK_FRANKEN_MARKDOWN
         then
-            log_warn "stack.franken_markdown: verify failed: fmd --version || fmd --help"
+            log_warn "stack.franken_markdown: verify failed: test \"\$(fmd --version 2>/dev/null)\" = \"fmd 0.4.2\""
             if type -t record_skipped_tool >/dev/null 2>&1; then
-              record_skipped_tool "stack.franken_markdown" "verify failed: fmd --version || fmd --help"
+              record_skipped_tool "stack.franken_markdown" "verify failed: test \"\$(fmd --version 2>/dev/null)\" = \"fmd 0.4.2\""
             elif type -t state_tool_skip >/dev/null 2>&1; then
               state_tool_skip "stack.franken_markdown"
             fi

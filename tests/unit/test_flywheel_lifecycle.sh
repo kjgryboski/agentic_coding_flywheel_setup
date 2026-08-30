@@ -7,7 +7,13 @@ trap 'rm -rf -- "$TEST_ROOT"' EXIT
 
 CALLS="$TEST_ROOT/calls"
 STATUS_FILE="$TEST_ROOT/status"
+PRESENT_FILE="$TEST_ROOT/present"
+PROFILE_FILE="$TEST_ROOT/profile"
+QUERY_FILE="$TEST_ROOT/query"
 printf 'Stopped\n' >"$STATUS_FILE"
+printf '1\n' >"$PRESENT_FILE"
+printf 'exact\n' >"$PROFILE_FILE"
+printf 'ok\n' >"$QUERY_FILE"
 : >"$CALLS"
 
 cat >"$TEST_ROOT/limactl" <<'SH'
@@ -15,8 +21,21 @@ cat >"$TEST_ROOT/limactl" <<'SH'
 set -euo pipefail
 case "${1:-}" in
     list)
+        printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
+        [[ "$(cat "$FLYWHEEL_TEST_QUERY_FILE")" == "ok" ]] || exit 44
+        [[ "$(cat "$FLYWHEEL_TEST_PRESENT_FILE")" == "1" ]] || exit 0
         status="$(cat "$FLYWHEEL_TEST_STATUS_FILE")"
-        printf '{"name":"agent-flywheel-ubuntu2404","status":"%s"}\n' "$status"
+        cpus=6
+        [[ "$(cat "$FLYWHEEL_TEST_PROFILE_FILE")" == "exact" ]] || cpus=4
+        printf '{"name":"agent-flywheel-ubuntu2404","status":"%s","vmType":"vz","arch":"aarch64","cpus":%s,"memory":10737418240,"disk":73014444032,"config":{"images":[{"location":"https://cloud-images.ubuntu.com/releases/24.04/release-20260814/ubuntu-24.04-server-cloudimg-arm64.img","arch":"aarch64","digest":"sha256:4a281a921b8d7db952895ab619736f10efe9f63e111fa5b5779ed18f023818aa"}],"plain":true,"mounts":[],"portForwards":[{"ignore":true}]}}\n' "$status" "$cpus"
+        ;;
+    validate)
+        printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
+        ;;
+    start)
+        printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
+        printf '1\n' >"$FLYWHEEL_TEST_PRESENT_FILE"
+        printf 'Running\n' >"$FLYWHEEL_TEST_STATUS_FILE"
         ;;
     shell)
         printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
@@ -31,6 +50,7 @@ case "${1:-}" in
         ;;
     stop)
         printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
+        printf 'Stopped\n' >"$FLYWHEEL_TEST_STATUS_FILE"
         ;;
     copy)
         printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
@@ -46,6 +66,9 @@ cat >"$TEST_ROOT/heavy-run" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$FLYWHEEL_TEST_CALLS"
+[[ "${1:-}" == "--stateful" && "${2:-}" == "--" ]]
+shift 2
+"$@"
 SH
 
 chmod 0755 "$TEST_ROOT/limactl" "$TEST_ROOT/heavy-run"
@@ -56,6 +79,9 @@ export FLYWHEEL_STATE_HOME="$TEST_ROOT/state"
 export FLYWHEEL_SOURCE_REPO="$REPO_ROOT"
 export FLYWHEEL_TEST_CALLS="$CALLS"
 export FLYWHEEL_TEST_STATUS_FILE="$STATUS_FILE"
+export FLYWHEEL_TEST_PRESENT_FILE="$PRESENT_FILE"
+export FLYWHEEL_TEST_PROFILE_FILE="$PROFILE_FILE"
+export FLYWHEEL_TEST_QUERY_FILE="$QUERY_FILE"
 
 python3 - "$REPO_ROOT/config/flywheel-partial-safe-allowlist.json" <<'PY'
 import json
@@ -86,11 +112,14 @@ printf '# Repository instructions\n' >"$QUALIFICATION_ROOT/AGENTS.md"
 printf 'name: test\non: push\njobs: {}\n' >"$QUALIFICATION_ROOT/.github/workflows/test.yml"
 cp "$REPO_ROOT/config/flywheel-partial-safe-allowlist.json" \
     "$QUALIFICATION_ROOT/config/flywheel-partial-safe-allowlist.json"
+cp "$REPO_ROOT/config/flywheel-lima.yaml" \
+    "$QUALIFICATION_ROOT/config/flywheel-lima.yaml"
 cp "$REPO_ROOT/scripts/flywheel-repository-control.py" \
     "$QUALIFICATION_ROOT/scripts/flywheel-repository-control.py"
 git -C "$QUALIFICATION_ROOT" add \
     acfs.manifest.yaml VERSION AGENTS.md .github/workflows/test.yml \
-    config/flywheel-partial-safe-allowlist.json scripts/flywheel-repository-control.py
+    config/flywheel-partial-safe-allowlist.json config/flywheel-lima.yaml \
+    scripts/flywheel-repository-control.py
 git -C "$QUALIFICATION_ROOT" -c user.name=Flywheel -c user.email=flywheel.invalid@example.test \
     commit -qm initial
 printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$TEST_ROOT/os-release"
@@ -152,6 +181,7 @@ assert len(value["bundle"]["sha256"]) == 64
 assert value["modules"] == {"approved": 8, "licensing_cleared": 0, "licensing_pending": 27}
 PY
 
+printf 'Stopped\n' >"$STATUS_FILE"
 status_rc=0
 status_json="$("$REPO_ROOT/flywheel" status --json)" || status_rc=$?
 [[ "$status_rc" -eq 1 ]]
@@ -162,7 +192,29 @@ assert value["schema"] == "agent-flywheel.status/v2"
 assert value["claim"] == "PARTIAL_SAFE"
 assert value["status"] == "Stopped"
 assert value["readiness"] == "attention"
-assert value["vm"] == {"healthy":False,"name":"agent-flywheel-ubuntu2404","status":"Stopped"}
+vm=value["vm"]
+assert vm["healthy"] is False
+assert vm["exists"] is True
+assert vm["name"] == "agent-flywheel-ubuntu2404"
+assert vm["status"] == "Stopped"
+assert vm["query_status"] == "ok"
+assert vm["contract"]["id"] == "agent-flywheel.mac-vm/v1"
+assert vm["contract"]["matches"] is True
+assert vm["mismatches"] == []
+assert vm["resources"] == {
+    "architecture":"aarch64",
+    "cpus":6,
+    "disk_bytes":73014444032,
+    "exposed_guest_ports":False,
+    "image":{
+        "digest":"sha256:4a281a921b8d7db952895ab619736f10efe9f63e111fa5b5779ed18f023818aa",
+        "location":"https://cloud-images.ubuntu.com/releases/24.04/release-20260814/ubuntu-24.04-server-cloudimg-arm64.img",
+    },
+    "memory_bytes":10737418240,
+    "mount_count":0,
+    "plain":True,
+    "vm_type":"vz",
+}
 assert value["source"]["clean"] is True
 assert value["source"]["matches_installation"] is True
 assert value["installation"]["status"] == "recorded"
@@ -174,9 +226,8 @@ assert any(item["code"] == "vm_not_running" for item in value["blockers"])
 ' "$status_json"
 
 "$REPO_ROOT/flywheel" start --quiet
-grep -F -- '--stateful -- '"$TEST_ROOT/limactl"' start agent-flywheel-ubuntu2404' "$CALLS" >/dev/null
+grep -F -- '--stateful -- '"$TEST_ROOT/limactl"' start --tty=false agent-flywheel-ubuntu2404' "$CALLS" >/dev/null
 
-printf 'Running\n' >"$STATUS_FILE"
 running_json="$("$REPO_ROOT/flywheel" status --json)"
 [[ "$running_json" == "$("$REPO_ROOT/flywheel" status --json)" ]]
 python3 -c '
@@ -190,6 +241,10 @@ assert [item["code"] for item in value["blockers"]] == ["receipt_not_connected"]
 running_text="$("$REPO_ROOT/flywheel" status)"
 [[ "$running_text" == *'Flywheel: ready'* ]]
 [[ "$running_text" == *'VM: agent-flywheel-ubuntu2404 (Running)'* ]]
+[[ "$running_text" == *'VM exists: yes'* ]]
+[[ "$running_text" == *'VM resources: vz/aarch64, 6 CPU, 10 GiB memory, 68 GiB disk, plain=true'* ]]
+[[ "$running_text" == *'VM contract: match'* ]]
+[[ "$running_text" == *'VM mismatches: none'* ]]
 [[ "$running_text" == *'Modules: 8 approved; 27 licensing approvals pending'* ]]
 [[ "$running_text" == *'Qualification: pass'* ]]
 [[ "$running_text" == *'Doctor: pass'* ]]
@@ -384,5 +439,70 @@ assert any(item["code"] == "installation_receipt_invalid" for item in value["blo
 
 "$REPO_ROOT/flywheel" stop --quiet
 grep -F -- 'stop agent-flywheel-ubuntu2404' "$CALLS" >/dev/null
+
+# A genuinely absent named VM is created from the canonical pinned template.
+: >"$CALLS"
+printf '0\n' >"$PRESENT_FILE"
+printf 'Stopped\n' >"$STATUS_FILE"
+printf 'exact\n' >"$PROFILE_FILE"
+printf 'ok\n' >"$QUERY_FILE"
+"$REPO_ROOT/flywheel" start --quiet
+grep -E -- 'validate .*/config/flywheel-lima\.yaml$' "$CALLS" >/dev/null
+grep -E -- '--stateful -- .*/limactl start --tty=false --name=agent-flywheel-ubuntu2404 .*/config/flywheel-lima\.yaml$' "$CALLS" >/dev/null
+[[ "$(<"$PRESENT_FILE")" == "1" ]]
+[[ "$(<"$STATUS_FILE")" == "Running" ]]
+
+# An inventory query failure is not treated as absence and cannot create a VM.
+: >"$CALLS"
+printf 'failed\n' >"$QUERY_FILE"
+query_rc=0
+query_error="$("$REPO_ROOT/flywheel" start --quiet 2>&1)" || query_rc=$?
+[[ "$query_rc" -eq 3 ]]
+[[ "$query_error" == *'cannot query Lima VM inventory; no VM was created or changed'* ]]
+if grep -F -- '--stateful --' "$CALLS" >/dev/null; then
+    printf 'query failure unexpectedly entered the heavy lifecycle guard\n' >&2
+    exit 1
+fi
+
+# Existing resource drift is visible and blocks start without replacing the VM.
+: >"$CALLS"
+printf 'ok\n' >"$QUERY_FILE"
+printf '1\n' >"$PRESENT_FILE"
+printf 'Stopped\n' >"$STATUS_FILE"
+printf 'drift\n' >"$PROFILE_FILE"
+drift_rc=0
+drift_error="$("$REPO_ROOT/flywheel" start --quiet 2>&1)" || drift_rc=$?
+[[ "$drift_rc" -eq 2 ]]
+[[ "$drift_error" == *'does not match the Flywheel contract (["cpus"]); it was not changed'* ]]
+if grep -F -- '--stateful --' "$CALLS" >/dev/null; then
+    printf 'resource drift unexpectedly entered the heavy lifecycle guard\n' >&2
+    exit 1
+fi
+drift_status_rc=0
+drift_status_json="$("$REPO_ROOT/flywheel" status --json)" || drift_status_rc=$?
+[[ "$drift_status_rc" -eq 1 ]]
+python3 -c '
+import json,sys
+value=json.loads(sys.argv[1])
+vm=value["vm"]
+assert vm["exists"] is True
+assert vm["resources"]["cpus"] == 4
+assert vm["contract"]["matches"] is False
+assert vm["mismatches"] == ["cpus"]
+assert any(item["code"] == "vm_contract_drift" for item in value["blockers"])
+' "$drift_status_json"
+drift_status_text_rc=0
+drift_status_text="$("$REPO_ROOT/flywheel" status 2>&1)" || drift_status_text_rc=$?
+[[ "$drift_status_text_rc" -eq 1 ]]
+[[ "$drift_status_text" == *'VM contract: mismatch'* ]]
+[[ "$drift_status_text" == *'VM mismatches: cpus'* ]]
+
+# Stop remains available during resource drift and does not repair or replace it.
+: >"$CALLS"
+printf 'Running\n' >"$STATUS_FILE"
+"$REPO_ROOT/flywheel" stop --quiet
+grep -F -- 'stop agent-flywheel-ubuntu2404' "$CALLS" >/dev/null
+[[ "$(<"$STATUS_FILE")" == "Stopped" ]]
+[[ "$(<"$PROFILE_FILE")" == "drift" ]]
 
 printf 'flywheel lifecycle tests: PASS\n'

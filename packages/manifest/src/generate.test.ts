@@ -637,15 +637,13 @@ describe('Generated verified installer args', () => {
     expect(agentsContent).toContain('acfs_link_primary_bin_command() {');
   });
 
-  test('stack.meta_skill uses an exact locked source build on Linux ARM64', () => {
+  test('stack.meta_skill uses an exact locked source build on Linux', () => {
     const stackPath = resolve(GENERATED_DIR, 'install_stack.sh');
     expect(existsSync(stackPath)).toBe(true);
     const stackContent = readFileSync(stackPath, 'utf-8');
 
-    expect(stackContent).toContain('meta_skill does not publish a Linux ARM64 binary');
+    expect(stackContent).toContain('Build the exact operator-approved source revision on every Linux host');
     expect(stackContent).toContain('[[ "$(uname -s 2>/dev/null)" == "Linux" ]]');
-    expect(stackContent).toContain('[[ "$(uname -m 2>/dev/null)" == "aarch64" ]]');
-    expect(stackContent).toContain('[[ "$(uname -m 2>/dev/null)" == "arm64" ]]');
     expect(stackContent).toContain('ms_source_commit="2a4bc62a04c98d8812bfe68b77c862d87e1731e3"');
     expect(stackContent).toContain('ms_source_tree="956bd9e6426d120341d50a30722b41ddd7f688c7"');
     expect(stackContent).toContain('ms_cargo_lock_sha256="d7684ea8c8392092df67e2aee4fb9e74fae0359389572760235217838a5c3181"');
@@ -669,14 +667,18 @@ describe('Generated verified installer args', () => {
     expect(stackContent).toContain('acfs_install_executable_into_primary_bin "$jfp_binary" jfp');
   });
 
-  test('stack.eidetic_engine_cli builds the exact locked Franken stack on Linux ARM64', () => {
+  test('stack.eidetic_engine_cli builds the exact locked Franken stack on Linux', () => {
     const stackContent = readFileSync(resolve(GENERATED_DIR, 'install_stack.sh'), 'utf-8');
 
+    expect(stackContent).toContain('Build the approved source and its locked siblings on every Linux host');
+    expect(stackContent).toContain('[[ "$(uname -s 2>/dev/null)" == "Linux" ]]');
     expect(stackContent).toContain('ee_source_commit="0fc6801c91edc0764cf405b049024a25c3199e09"');
     expect(stackContent).toContain('ee_source_tree="179ac1bb86320f3874b34cec1cbcca2b85c7eadf"');
     expect(stackContent).toContain('ee_stack_lock_sha256="9b649eff8925fd22d980e7bbddd7ff479ff6318c14f141fe9a8343b7a4db2738"');
     expect(stackContent).toContain('scripts/checkout-franken-stack.sh" "$ee_source_dir"');
-    expect(stackContent).toContain('build --release --locked --bin ee');
+    expect(stackContent).toContain(
+      'CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" build --jobs 1 --release --locked --bin ee'
+    );
     expect(stackContent).toContain('[[ "$ee_version" == "ee 0.14.2" ]]');
     expect(stackContent).toContain('acfs_install_executable_into_primary_bin "$ee_binary" ee');
   });
@@ -731,6 +733,38 @@ describe('Generated verified installer args', () => {
     expect(caamContent).toContain('verify_checksum "$url" "$expected_sha256" "$tool"');
     expect(caamContent).toContain(`run_as_target_runner 'env' 'NONINTERACTIVE=1' 'bash' "$verified_installer_file"`);
     expect(caamContent).not.toContain('CAAM_SKIP_VERIFY');
+  });
+
+  test('stack.srps uses its fixed system path and absolute helper verification', () => {
+    const stackContent = readFileSync(resolve(GENERATED_DIR, 'install_stack.sh'), 'utf-8');
+    const srpsStart = stackContent.indexOf('acfs_generated_install_stack_srps() {');
+    const nextModule = stackContent.indexOf('\nacfs_generated_install_stack_', srpsStart + 1);
+    const srpsContent = stackContent.slice(srpsStart, nextModule);
+
+    expect(srpsContent).toContain(
+      `run_as_target_runner 'env' 'PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin' 'bash' "$verified_installer_file" '--install'`
+    );
+    expect(srpsContent).toContain('test -x /usr/local/bin/sysmoni');
+    expect(srpsContent).not.toContain('command -v sysmoni');
+  });
+
+  test('RCH, Eidetic Engine, and Franken Markdown use bounded exact-source builds', () => {
+    const stackContent = readFileSync(resolve(GENERATED_DIR, 'install_stack.sh'), 'utf-8');
+    expect(stackContent).toContain(
+      'local rch_source_commit="0a982fdee2ca5ce26791dd17b83285916a7b97f6"'
+    );
+    expect(stackContent).toContain(
+      'CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$rch_cargo_bin" +"$rch_toolchain" build --locked --jobs 1'
+    );
+    expect(stackContent).toContain(
+      'run_as_target env CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$ee_cargo_bin" build --jobs 1 --release --locked --bin ee'
+    );
+    expect(stackContent).toContain(
+      'local fmd_source_commit="5637bad86e3c0deacab6411a734715015b143a12"'
+    );
+    expect(stackContent).toContain(
+      'CARGO_BUILD_JOBS=1 RUSTFLAGS= CARGO_NET_GIT_FETCH_WITH_CLI=true "$fmd_cargo_bin" +"$fmd_toolchain" build --locked --jobs 1'
+    );
   });
 
   test('stack.pcr emits a pre-install Claude check before the verified installer', () => {

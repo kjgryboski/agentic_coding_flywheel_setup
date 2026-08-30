@@ -6,7 +6,7 @@
 # ============================================================
 # Data-only manifest index. Safe to source.
 
-ACFS_MANIFEST_SHA256="146a55d57069f151ecf17e3549350501022888f66b097ecea49eb84795b9bf8a"
+ACFS_MANIFEST_SHA256="b2d66c80dbc1c262b399672ed9a392c07b650080e017c9e449180ebc3ef86f1a"
 
 ACFS_MODULES_IN_ORDER=(
   "base.system"
@@ -748,7 +748,7 @@ declare -gA ACFS_MODULE_INSTALLED_CHECK=(
   ['cloud.vercel']="command -v vercel"
   ['stack.ntm']="command -v ntm"
   ['stack.mcp_agent_mail']="false"
-  ['stack.meta_skill']="command -v ms"
+  ['stack.meta_skill']="test \"\$(ms --version 2>/dev/null)\" = \"ms 0.2.2\""
   ['stack.automated_plan_reviser']="command -v apr"
   ['stack.jeffreysprompts']="test \"\$(jfp --version 2>/dev/null)\" = \"jfp 0.1.0\""
   ['stack.process_triage']="command -v pt"
@@ -762,9 +762,9 @@ declare -gA ACFS_MODULE_INSTALLED_CHECK=(
   ['stack.dcg']="command -v dcg"
   ['stack.ru']="command -v ru"
   ['stack.brenner_bot']="command -v brenner"
-  ['stack.rch']="command -v rch"
+  ['stack.rch']="test \"\$(rch --version 2>/dev/null)\" = \"rch 1.0.60 (commit 0a982fdee2ca)\" && test \"\$(rchd --version 2>/dev/null)\" = \"rchd 1.0.60 (commit 0a982fdee2ca)\" && test \"\$(rch-wkr --version 2>/dev/null)\" = \"rch-wkr 1.0.60 (commit 0a982fdee2ca)\""
   ['stack.wezterm_automata']="command -v wa"
-  ['stack.srps']="command -v sysmoni && systemctl is-active ananicy-cpp >/dev/null 2>&1"
+  ['stack.srps']="test -x /usr/local/bin/sysmoni && systemctl is-active ananicy-cpp >/dev/null 2>&1"
   ['stack.frankensearch']="command -v fsfs"
   ['stack.storage_ballast_helper']="command -v sbh"
   ['stack.cross_agent_session_resumer']="command -v casr"
@@ -772,7 +772,7 @@ declare -gA ACFS_MODULE_INSTALLED_CHECK=(
   ['stack.agent_settings_backup']="command -v asb"
   ['stack.pcr']="claude_settings_has_command_hook() {   local settings_file=\"\${1:-}\"   local command_pattern=\"\${2:-}\"   local jq_bin=\"\"    [[ -n \"\$settings_file\" && -n \"\$command_pattern\" ]] || return 1   [[ -f \"\$settings_file\" ]] || return 1   for jq_bin in /usr/bin/jq /bin/jq /usr/local/bin/jq /usr/local/sbin/jq /usr/sbin/jq /sbin/jq; do     [[ -x \"\$jq_bin\" ]] && break   done   [[ -x \"\$jq_bin\" ]] || return 1    \"\$jq_bin\" -e --arg pattern \"\$command_pattern\" '     def command_hook_matches:       type == \"object\"       and ((.type? // \"command\") == \"command\")       and ((.command? // \"\") | strings | test(\$pattern));     def event_entry_matches:       if type == \"object\" and (.hooks? | type) == \"array\" then         any(.hooks[]?; command_hook_matches)       else         command_hook_matches       end;     def hook_event_entries:       if (.hooks? | type) == \"object\" then         .hooks | to_entries[]? | .value | arrays | .[]?       elif (.hooks? | type) == \"array\" then         .hooks[]?       else         empty       end;     any(hook_event_entries; event_entry_matches)   ' \"\$settings_file\" >/dev/null 2>&1 }  target_home=\"\${TARGET_HOME:-\$HOME}\" hook_script=\"\$target_home/.local/bin/claude-post-compact-reminder\" settings=\"\$target_home/.claude/settings.json\" alt_settings=\"\$target_home/.config/claude/settings.json\" pcr_command_pattern='(^|[[:space:]/])claude-post-compact-reminder([[:space:]]|\$)'  test -x \"\$hook_script\" || exit 1  claude_settings_has_command_hook \"\$settings\" \"\$pcr_command_pattern\" ||   claude_settings_has_command_hook \"\$alt_settings\" \"\$pcr_command_pattern\" "
   ['stack.eidetic_engine_cli']="test \"\$(ee --version 2>/dev/null)\" = \"ee 0.14.2\""
-  ['stack.franken_markdown']="command -v fmd"
+  ['stack.franken_markdown']="test \"\$(fmd --version 2>/dev/null)\" = \"fmd 0.4.2\""
   ['stack.pi_agent_rust']="command -v pi"
   ['stack.power_failure_resumer']="command -v pfr"
   ['utils.giil']="command -v giil"

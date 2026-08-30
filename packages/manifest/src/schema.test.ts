@@ -473,6 +473,7 @@ describe('ModuleSchema', () => {
       { tool: 'grok', entry: 'GROK_BIN_DIR=$TARGET_HOME/.local/bin' },
       { tool: 'caam', entry: 'NONINTERACTIVE=1' },
       { tool: 'slb', entry: 'INSTALL_DIR=$TARGET_HOME/.local/bin' },
+      { tool: 'srps', entry: 'PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin' },
       { tool: 'cass', entry: 'TMPDIR=$TARGET_HOME/.cache/acfs/installer-tmp/cass.XXXXXX' },
     ];
 
@@ -525,6 +526,7 @@ describe('ModuleSchema', () => {
       { tool: 'grok', env: ['GROK_BIN_DIR=$TARGET_HOME/.grok/bin'] },
       { tool: 'caam', env: ['NONINTERACTIVE=0'] },
       { tool: 'slb', env: ['INSTALL_DIR=/usr/local/bin'] },
+      { tool: 'srps', env: ['PATH=/usr/local/bin:/usr/bin:/bin'] },
       { tool: 'grok', env: ['RU_NON_INTERACTIVE=1'] },
       { tool: 'mcp_agent_mail', env: ['ATUIN_NO_MODIFY_PATH=1'] },
     ]) {

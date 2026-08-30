@@ -4936,10 +4936,13 @@ _acfs_clean_runner_env_allowed() {
     local component=""
 
     case "$assignment" in
-        ATUIN_NO_MODIFY_PATH=1|AM_INSTALL_SKIP_MCP_SETUP=1|AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1|RU_NON_INTERACTIVE=1)
+        ATUIN_NO_MODIFY_PATH=1|AM_INSTALL_SKIP_MCP_SETUP=1|AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1|RU_NON_INTERACTIVE=1|NONINTERACTIVE=1)
             return 0
             ;;
-        "GROK_BIN_DIR=$user_home/.local/bin")
+        "GROK_BIN_DIR=$user_home/.local/bin"|"INSTALL_DIR=$user_home/.local/bin")
+            return 0
+            ;;
+        "PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin")
             return 0
             ;;
         TMPDIR=*)
@@ -11737,7 +11740,7 @@ main() {
 
             # Show progress header before running phase
             if type -t show_progress_header &>/dev/null; then
-                show_progress_header "$phase_num" 5 "$phase_name" "$installation_start_time" "$phase_id"
+                show_progress_header "$phase_num" 6 "$phase_name" "$installation_start_time" "$phase_id"
             fi
 
             # Record-and-continue: a failing phase must not abort the run, or
@@ -11749,7 +11752,7 @@ main() {
                 if ! run_phase "$phase_id" "$phase_display" "$phase_func"; then
                     # Use structured error reporting
                     if type -t report_failure &>/dev/null; then
-                        report_failure "$phase_num" 5
+                        report_failure "$phase_num" 6
                     else
                         log_error "Phase $phase_display failed"
                     fi
@@ -11769,11 +11772,12 @@ main() {
             fi
         }
 
-        _run_phase_with_report "user_setup" "1/5 User Setup" normalize_user || true
-        _run_phase_with_report "filesystem" "2/5 Filesystem" setup_filesystem || true
-        _run_phase_with_report "cli_tools" "3/5 CLI Tools" install_cli_tools || true
-        _run_phase_with_report "languages" "4/5 Languages" install_languages || true
-        _run_phase_with_report "stack" "5/5 Stack" install_stack_phase || true
+        _run_phase_with_report "user_setup" "1/6 User Setup" normalize_user || true
+        _run_phase_with_report "filesystem" "2/6 Filesystem" setup_filesystem || true
+        _run_phase_with_report "cli_tools" "3/6 CLI Tools" install_cli_tools || true
+        _run_phase_with_report "languages" "4/6 Languages" install_languages || true
+        _run_phase_with_report "agents" "5/6 Coding Agents" install_agents_phase || true
+        _run_phase_with_report "stack" "6/6 Stack" install_stack_phase || true
 
         # Runtime metadata publication is a finalize action and therefore held.
         # The repository artifacts are sealed deterministically before this run.

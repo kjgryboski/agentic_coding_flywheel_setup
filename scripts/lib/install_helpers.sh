@@ -1028,10 +1028,13 @@ _acfs_clean_runner_env_allowed() {
     local component=""
 
         case "$assignment" in
-            ATUIN_NO_MODIFY_PATH=1|AM_INSTALL_SKIP_MCP_SETUP=1|AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1|RU_NON_INTERACTIVE=1)
+            ATUIN_NO_MODIFY_PATH=1|AM_INSTALL_SKIP_MCP_SETUP=1|AM_INSTALL_SKIP_REMOTE_HTTP_READINESS=1|RU_NON_INTERACTIVE=1|NONINTERACTIVE=1)
                 return 0
                 ;;
-            "GROK_BIN_DIR=$user_home/.local/bin")
+            "GROK_BIN_DIR=$user_home/.local/bin"|"INSTALL_DIR=$user_home/.local/bin")
+                return 0
+                ;;
+            "PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin")
                 return 0
                 ;;
         TMPDIR=*)

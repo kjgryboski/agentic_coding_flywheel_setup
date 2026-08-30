@@ -54,6 +54,9 @@ function isAllowedVerifiedInstallerEnv(tool: string, entry: string): boolean {
   if (tool === 'ru' || tool === 's2p') return entry === 'RU_NON_INTERACTIVE=1';
   if (tool === 'caam') return entry === 'NONINTERACTIVE=1';
   if (tool === 'slb') return entry === 'INSTALL_DIR=$TARGET_HOME/.local/bin';
+  if (tool === 'srps') {
+    return entry === 'PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin';
+  }
   if (tool === 'cass') {
     return entry === 'TMPDIR=$TARGET_HOME/.cache/acfs/installer-tmp/cass.XXXXXX';
   }
