@@ -623,7 +623,9 @@ doctor_command() {
     local root=""
     local head=""
     local guest_root=""
-    local doctor_args=()
+    # Bash 3.2 with nounset treats expansion of an empty array as unbound.
+    # Keep a sentinel and slice it away so the plain command passes zero args.
+    local doctor_args=(__flywheel_sentinel__)
     root="$(source_root)"
     head="$(git -C "$root" rev-parse HEAD)"
     guest_root="/opt/agent-flywheel-acfs-$head"
@@ -637,7 +639,7 @@ doctor_command() {
         TARGET_HOME=/home/ubuntu \
         FLYWHEEL_SOURCE_ROOT="$guest_root" \
         ACFS_PARTIAL_SAFE_ALLOWLIST_FILE=/var/lib/agent-flywheel/doctor-allowlist.json \
-        bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh" "${doctor_args[@]}"
+        bash -p "$guest_root/scripts/flywheel-partial-safe-doctor.sh" "${doctor_args[@]:1}"
 }
 
 stop_command() {

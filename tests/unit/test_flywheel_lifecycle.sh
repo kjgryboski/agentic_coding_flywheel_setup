@@ -262,6 +262,9 @@ assert [item["code"] for item in value["blockers"]] == ["receipt_invalid"]
 doctor_json="$("$REPO_ROOT/flywheel" doctor --json)"
 python3 -c 'import json,sys; value=json.loads(sys.argv[1]); assert value["status"] == "pass"' "$doctor_json"
 grep -F -- 'scripts/flywheel-partial-safe-doctor.sh --json' "$CALLS" >/dev/null
+doctor_text="$("$REPO_ROOT/flywheel" doctor)"
+python3 -c 'import json,sys; value=json.loads(sys.argv[1]); assert value["status"] == "pass"' "$doctor_text"
+grep -E -- 'scripts/flywheel-partial-safe-doctor\.sh$' "$CALLS" >/dev/null
 
 capabilities_json="$("$REPO_ROOT/flywheel" capabilities --json)"
 [[ "$capabilities_json" == "$("$REPO_ROOT/flywheel" capabilities --json)" ]]
